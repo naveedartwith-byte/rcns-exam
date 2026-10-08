@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   SearchBar,
   Select,
@@ -19,21 +19,42 @@ import {
   Alert,
   EmptyState,
   Checkbox,
+  LoadingSpinner,
 } from '../../components/ui';
-import { MOCK_TEACHERS, MOCK_DEPARTMENTS } from '../../mock/mockData';
+import { MOCK_DEPARTMENTS } from '../../mock/mockData';
+import { teacherService } from '../../services/teacherService';
+import { adminService } from '../../services/adminService';
+import type { TeacherProfile } from '../../types/teacher';
 
 export const AdminTeachersPage: React.FC = () => {
-  const [teachers, setTeachers] = useState(MOCK_TEACHERS);
+  const [teachers, setTeachers] = useState<TeacherProfile[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [departmentFilter, setDepartmentFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
 
+  const fetchTeachers = async () => {
+    try {
+      setLoading(true);
+      const fetched = await teacherService.getAllTeachers();
+      setTeachers(fetched);
+    } catch (err) {
+      console.error('Error fetching teachers in admin:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchTeachers();
+  }, []);
+
   // Modals
-  const [selectedTeacher, setSelectedTeacher] = useState<typeof MOCK_TEACHERS[0] | null>(null);
-  const [editingTeacher, setEditingTeacher] = useState<typeof MOCK_TEACHERS[0] | null>(null);
+  const [selectedTeacher, setSelectedTeacher] = useState<TeacherProfile | null>(null);
+  const [editingTeacher, setEditingTeacher] = useState<TeacherProfile | null>(null);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [permissionsTeacher, setPermissionsTeacher] = useState<typeof MOCK_TEACHERS[0] | null>(null);
-  const [toggleStatusTeacher, setToggleStatusTeacher] = useState<typeof MOCK_TEACHERS[0] | null>(null);
+  const [permissionsTeacher, setPermissionsTeacher] = useState<TeacherProfile | null>(null);
+  const [toggleStatusTeacher, setToggleStatusTeacher] = useState<TeacherProfile | null>(null);
   const [notification, setNotification] = useState<string | null>(null);
 
   // Form State
@@ -71,58 +92,51 @@ export const AdminTeachersPage: React.FC = () => {
     setIsAddModalOpen(true);
   };
 
-  const handleOpenEditModal = (t: typeof MOCK_TEACHERS[0]) => {
+  const handleOpenEditModal = (t: TeacherProfile) => {
     setEditingTeacher(t);
     setFormData({
       name: t.name,
       email: t.email,
       department: t.department,
-      designation: t.designation,
-      phone: t.phone,
-      courses: t.courses.join(', '),
+      designation: t.designation || 'Assistant Professor',
+      phone: t.phone || '',
+      courses: (t.courses || []).join(', '),
     });
   };
 
-  const handleSaveTeacher = (e: React.FormEvent) => {
+  const handleSaveTeacher = async (e: React.FormEvent) => {
     e.preventDefault();
     const courseList = formData.courses.split(',').map((c) => c.trim()).filter(Boolean);
 
     if (editingTeacher) {
-      setTeachers((prev) =>
-        prev.map((item) =>
-          item.uid === editingTeacher.uid
-            ? {
-                ...item,
-                name: formData.name,
-                email: formData.email,
-                department: formData.department,
-                designation: formData.designation,
-                phone: formData.phone,
-                courses: courseList,
-                updatedAt: new Date().toISOString(),
-              }
-            : item
-        )
-      );
-      setNotification(`Faculty details for ${formData.name} updated.`);
+      try {
+        await teacherService.updateTeacherProfile(editingTeacher.uid, {
+          name: formData.name,
+          designation: formData.designation,
+          phone: formData.phone,
+          courses: courseList,
+        });
+        setNotification(`Faculty details for ${formData.name} updated.`);
+        fetchTeachers();
+      } catch (err) {
+        console.error('Error updating teacher:', err);
+      }
       setEditingTeacher(null);
     } else {
-      const newTeacher: typeof MOCK_TEACHERS[0] = {
-        uid: `teacher-${Date.now()}`,
-        role: 'teacher',
-        name: formData.name,
-        email: formData.email,
-        department: formData.department,
-        designation: formData.designation,
-        phone: formData.phone,
-        totalExams: 0,
-        status: 'active',
-        courses: courseList,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      setTeachers((prev) => [newTeacher, ...prev]);
-      setNotification(`Faculty member ${formData.name} inducted.`);
+      try {
+        await adminService.provisionTeacher({
+          name: formData.name,
+          email: formData.email,
+          department: formData.department,
+          designation: formData.designation,
+          phone: formData.phone,
+          courses: courseList,
+        });
+        setNotification(`Faculty member ${formData.name} profile provisioned.`);
+        fetchTeachers();
+      } catch (err) {
+        console.error('Error provisioning teacher:', err);
+      }
       setIsAddModalOpen(false);
     }
     setTimeout(() => setNotification(null), 3500);
@@ -197,7 +211,9 @@ export const AdminTeachersPage: React.FC = () => {
       </Card>
 
       {/* Faculty Table */}
-      {filteredTeachers.length === 0 ? (
+      {loading ? (
+        <LoadingSpinner text="Loading faculty roster..." />
+      ) : filteredTeachers.length === 0 ? (
         <EmptyState
           title="No Faculty Members Found"
           description="Try modifying search keywords or clear current department filter."
@@ -328,7 +344,7 @@ export const AdminTeachersPage: React.FC = () => {
               <div style={{ gridColumn: 'span 2' }}>
                 <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)', textTransform: 'uppercase' }}>Assigned Courses</span>
                 <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.35rem' }}>
-                  {selectedTeacher.courses.map((c, i) => (
+                  {(selectedTeacher.courses || []).map((c: string, i: number) => (
                     <Badge key={i} variant="primary">{c}</Badge>
                   ))}
                 </div>

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   SearchBar,
   Select,
@@ -15,18 +15,51 @@ import {
   Modal,
   Avatar,
   EmptyState,
+  LoadingSpinner,
 } from '../../components/ui';
-import { MOCK_STUDENTS, MOCK_PROGRAMS, MOCK_SEMESTERS, MOCK_RESULTS } from '../../mock/mockData';
+import { MOCK_PROGRAMS, MOCK_SEMESTERS } from '../../mock/mockData';
+import { studentService } from '../../services/studentService';
+import { resultService } from '../../services/resultService';
+import type { StudentProfile } from '../../types/student';
+import type { Result } from '../../types/result';
 
 export const TeacherStudentsPage: React.FC = () => {
+  const [students, setStudents] = useState<StudentProfile[]>([]);
+  const [results, setResults] = useState<Result[]>([]);
+  const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [programFilter, setProgramFilter] = useState('all');
   const [semesterFilter, setSemesterFilter] = useState('all');
 
-  const [selectedStudent, setSelectedStudent] = useState<typeof MOCK_STUDENTS[0] | null>(null);
-  const [viewingResultsStudent, setViewingResultsStudent] = useState<typeof MOCK_STUDENTS[0] | null>(null);
+  const [selectedStudent, setSelectedStudent] = useState<StudentProfile | null>(null);
+  const [viewingResultsStudent, setViewingResultsStudent] = useState<StudentProfile | null>(null);
 
-  const filteredStudents = MOCK_STUDENTS.filter((s) => {
+  useEffect(() => {
+    let isMounted = true;
+    const fetchStudentsAndResults = async () => {
+      try {
+        setLoading(true);
+        const [fetchedStudents, fetchedResults] = await Promise.all([
+          studentService.getAllStudents(),
+          resultService.getAllResults(),
+        ]);
+        if (isMounted) {
+          setStudents(fetchedStudents);
+          setResults(fetchedResults);
+        }
+      } catch (err) {
+        console.error('Error fetching teacher student roster:', err);
+      } finally {
+        if (isMounted) setLoading(false);
+      }
+    };
+    fetchStudentsAndResults();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const filteredStudents = students.filter((s) => {
     if (programFilter !== 'all' && s.program !== programFilter) return false;
     if (semesterFilter !== 'all' && s.semester !== semesterFilter) return false;
     if (searchQuery.trim()) {
@@ -39,7 +72,7 @@ export const TeacherStudentsPage: React.FC = () => {
   });
 
   const studentResults = viewingResultsStudent
-    ? MOCK_RESULTS.filter((r) => r.studentId === viewingResultsStudent.uid || r.kmuRegistrationNo === viewingResultsStudent.kmuRegistrationNo)
+    ? results.filter((r) => r.studentId === viewingResultsStudent.uid || r.kmuRegistrationNo === viewingResultsStudent.kmuRegistrationNo)
     : [];
 
   return (
@@ -84,7 +117,9 @@ export const TeacherStudentsPage: React.FC = () => {
       </Card>
 
       {/* Student Table */}
-      {filteredStudents.length === 0 ? (
+      {loading ? (
+        <LoadingSpinner text="Loading candidate roster..." />
+      ) : filteredStudents.length === 0 ? (
         <EmptyState
           title="No Students Found"
           description="Try broadening your search term or reset program/semester filters."
@@ -132,12 +167,12 @@ export const TeacherStudentsPage: React.FC = () => {
                     <TableCell>{student.semester}</TableCell>
 
                     <TableCell>
-                      <strong style={{ color: 'var(--color-slate-900)', fontSize: '0.95rem' }}>{student.gpa.toFixed(2)}</strong> / 4.00
+                      <strong style={{ color: 'var(--color-slate-900)', fontSize: '0.95rem' }}>{(student.gpa ?? 3.5).toFixed(2)}</strong> / 4.00
                     </TableCell>
 
                     <TableCell>
-                      <Badge variant={student.status === 'active' ? 'success' : 'danger'}>
-                        {student.status}
+                      <Badge variant={(student.status || 'active') === 'active' ? 'success' : 'danger'}>
+                        {student.status || 'active'}
                       </Badge>
                     </TableCell>
 
@@ -222,7 +257,7 @@ export const TeacherStudentsPage: React.FC = () => {
 
               <div>
                 <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)', textTransform: 'uppercase' }}>Academic Standing</span>
-                <div style={{ fontWeight: 700, color: '#059669' }}>GPA: {selectedStudent.gpa.toFixed(2)} (Good Standing)</div>
+                <div style={{ fontWeight: 700, color: '#059669' }}>GPA: {(selectedStudent.gpa ?? 3.5).toFixed(2)} (Good Standing)</div>
               </div>
             </div>
           </div>
@@ -264,17 +299,17 @@ export const TeacherStudentsPage: React.FC = () => {
                   {studentResults.map((r) => (
                     <TableRow key={r.id}>
                       <TableCell>
-                        <div style={{ fontWeight: 600 }}>{r.subject}</div>
+                        <div style={{ fontWeight: 600 }}>{r.subject || 'Nursing Assessment'}</div>
                       </TableCell>
                       <TableCell>
-                        <Badge variant="outline">{r.examType.toUpperCase()}</Badge>
+                        <Badge variant="outline">{(r.examType || 'exam').toUpperCase()}</Badge>
                       </TableCell>
                       <TableCell>
                         <strong>{r.marks}</strong> / {r.totalMarks}
                       </TableCell>
                       <TableCell>{r.percentage}%</TableCell>
                       <TableCell>
-                        <Badge variant="primary">{r.grade}</Badge>
+                        <Badge variant="primary">{r.grade || 'Pass'}</Badge>
                       </TableCell>
                       <TableCell>
                         <Badge variant="success">PASSED</Badge>

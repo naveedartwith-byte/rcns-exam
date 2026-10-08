@@ -7,6 +7,11 @@ export interface TeacherProfile {
   name: string;
   email: string;
   department: string;
+  designation?: string;
+  phone?: string;
+  courses?: string[];
+  totalExams?: number;
+  status?: 'active' | 'inactive';
   createdAt: Timestamp | string;
   updatedAt: Timestamp | string;
 }

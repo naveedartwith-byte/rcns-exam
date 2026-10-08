@@ -9,6 +9,7 @@ import {
 } from 'firebase/auth';
 import {
   doc,
+  getDoc,
   serverTimestamp,
   runTransaction,
 } from 'firebase/firestore';
@@ -19,15 +20,44 @@ import { normalizeKmuRegistration } from '../utils/kmuRegistration';
 
 /**
  * Authentication Service Module
- * Handles Firebase Auth operations with Email/Password and linked Firestore identity creation.
+ * Handles Firebase Auth operations with Email/Password, KMU login resolution,
+ * and linked Firestore identity creation.
  */
 
 export const authService = {
   /**
-   * Logs in an existing user using Email and Password.
+   * Logs in a teacher or admin user using Email and Password.
    */
   async login(email: string, password: string): Promise<FirebaseUser> {
     const userCredential = await signInWithEmailAndPassword(auth, email.trim(), password);
+    return userCredential.user;
+  },
+
+  /**
+   * Logs in a student using KMU Registration Number + Password.
+   * Resolves the student's KMU Registration Number to their Firebase Auth account.
+   */
+  async loginWithKmu(kmuRegistrationNo: string, password: string): Promise<FirebaseUser> {
+    const normalizedKmu = normalizeKmuRegistration(kmuRegistrationNo);
+    if (!normalizedKmu) {
+      throw new Error('Please enter a valid KMU Registration Number (e.g., 2026/KMU-RCNS/001).');
+    }
+
+    const kmuRef = doc(db, 'kmuRegistrations', normalizedKmu);
+    const kmuDoc = await getDoc(kmuRef);
+
+    if (!kmuDoc.exists()) {
+      throw new Error(
+        `KMU Registration Number "${kmuRegistrationNo.trim()}" is not registered in the system. Please verify your number or create an account.`
+      );
+    }
+
+    const regData = kmuDoc.data() as { email?: string };
+    if (!regData?.email) {
+      throw new Error('Unable to resolve account credentials for this KMU Registration Number.');
+    }
+
+    const userCredential = await signInWithEmailAndPassword(auth, regData.email.trim(), password);
     return userCredential.user;
   },
 
@@ -42,8 +72,9 @@ export const authService = {
    * Registers a new student account, verifies KMU uniqueness via atomic transaction,
    * creates the auth user, common user doc, student profile doc, and KMU registry claim.
    * NOTE: Passwords are NEVER saved in Firestore.
+   * Does NOT auto-login the user after registration.
    */
-  async registerStudent(data: StudentRegistrationData): Promise<FirebaseUser> {
+  async registerStudent(data: StudentRegistrationData): Promise<void> {
     const normalizedKmu = normalizeKmuRegistration(data.kmuRegistrationNo);
 
     // 1. Create the Firebase Auth user
@@ -68,9 +99,10 @@ export const authService = {
         const userRef = doc(db, 'users', uid);
         const studentRef = doc(db, 'students', uid);
 
-        // Reserve KMU Registration
+        // Reserve KMU Registration with email mapping
         transaction.set(kmuRef, {
           uid,
+          email: data.email.trim(),
           kmuRegistrationNo: data.kmuRegistrationNo.trim(),
           normalizedRegistrationNo: normalizedKmu,
           registeredAt: serverTimestamp(),
@@ -94,6 +126,7 @@ export const authService = {
           fatherName: data.fatherName.trim(),
           email: data.email.trim(),
           kmuRegistrationNo: data.kmuRegistrationNo.trim(),
+          batch: data.batch.trim(),
           semester: data.semester.trim(),
           program: data.program.trim(),
           department: data.department.trim(),
@@ -102,9 +135,11 @@ export const authService = {
         });
       });
 
-      return user;
+      // Sign out immediately so user is not auto-logged in
+      await signOut(auth);
     } catch (error) {
-      // If Firestore transaction fails, clean up or surface error
+      // If Firestore setup failed after Auth user creation, sign out and bubble error
+      await signOut(auth);
       throw error;
     }
   },
@@ -132,3 +167,4 @@ export const authService = {
 };
 
 export default authService;
+

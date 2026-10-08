@@ -4,7 +4,7 @@ import { useAuth } from '../../hooks/useAuth';
 import { Logo, Input, Button, Alert, Checkbox } from '../../components/ui';
 
 export const LoginPage: React.FC = () => {
-  const { login, role } = useAuth();
+  const { login, loginWithKmu, role } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -38,9 +38,7 @@ export const LoginPage: React.FC = () => {
     setIsLoading(true);
     try {
       if (activePortalTab === 'student') {
-        // In Phase 2 frontend, map student login to student credential or mock student auth
-        const studentLoginEmail = 'farhan.student@royalcollege.edu.pk';
-        await login(studentLoginEmail, password);
+        await loginWithKmu(kmuRegNo.trim(), password);
         navigate(from || '/student', { replace: true });
       } else {
         await login(email.trim(), password);
@@ -52,7 +50,8 @@ export const LoginPage: React.FC = () => {
       if (
         error.code === 'auth/invalid-credential' ||
         error.code === 'auth/user-not-found' ||
-        error.code === 'auth/wrong-password'
+        error.code === 'auth/wrong-password' ||
+        error.code === 'auth/invalid-email'
       ) {
         setErrorMessage(
           activePortalTab === 'student'
@@ -64,11 +63,6 @@ export const LoginPage: React.FC = () => {
       } else if (error.code === 'auth/network-request-failed') {
         setErrorMessage('Network error. Please check your internet connection.');
       } else {
-        // For local demo/testing if offline or Firebase unconfigured
-        if (activePortalTab === 'student') {
-          navigate(from || '/student', { replace: true });
-          return;
-        }
         setErrorMessage(error.message || 'Authentication failed. Please try again.');
       }
     } finally {

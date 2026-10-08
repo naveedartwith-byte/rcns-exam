@@ -102,6 +102,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const loginWithKmu = async (kmuRegistrationNo: string, password: string): Promise<void> => {
+    setLoading(true);
+    try {
+      await authService.loginWithKmu(kmuRegistrationNo, password);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const logout = async (): Promise<void> => {
     setLoading(true);
     try {
@@ -139,6 +148,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     role,
     loading,
     login,
+    loginWithKmu,
     logout,
     registerStudent,
     resetPassword,

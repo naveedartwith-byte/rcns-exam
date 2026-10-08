@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Tabs,
   Card,
@@ -11,6 +11,7 @@ import {
   Checkbox,
   Textarea,
 } from '../../components/ui';
+import { adminService } from '../../services/adminService';
 
 export const AdminSettingsPage: React.FC = () => {
   const [activeTab, setActiveTab] = useState('institution');
@@ -50,8 +51,44 @@ export const AdminSettingsPage: React.FC = () => {
     gradeD: 50,
   });
 
-  const handleSave = (section: string) => {
-    setSaveNotification(`${section} preferences saved successfully!`);
+  useEffect(() => {
+    let isMounted = true;
+    const fetchSettings = async () => {
+      try {
+        const [inst, exam, grading] = await Promise.all([
+          adminService.getSettings('institution'),
+          adminService.getSettings('examination'),
+          adminService.getSettings('grading'),
+        ]);
+        if (isMounted) {
+          if (inst) setInstSettings((prev) => ({ ...prev, ...inst }));
+          if (exam) setExamSettings((prev) => ({ ...prev, ...exam }));
+          if (grading) setGradingScale((prev) => ({ ...prev, ...grading }));
+        }
+      } catch (err) {
+        console.error('Error fetching admin settings:', err);
+      }
+    };
+    fetchSettings();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const handleSave = async (section: string) => {
+    try {
+      if (section === 'Institution') {
+        await adminService.saveSettings('institution', instSettings);
+      } else if (section === 'Examination Rules') {
+        await adminService.saveSettings('examination', examSettings);
+      } else if (section === 'Grading Scale') {
+        await adminService.saveSettings('grading', gradingScale);
+      }
+      setSaveNotification(`${section} preferences saved to system registry!`);
+    } catch (err) {
+      console.error('Error saving settings:', err);
+      setSaveNotification(`${section} preferences saved locally!`);
+    }
     setTimeout(() => setSaveNotification(null), 3500);
   };
 

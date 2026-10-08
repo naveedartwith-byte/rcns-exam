@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { useAuth } from '../../hooks/useAuth';
 import { Logo, Input, Select, Button, Alert, Checkbox } from '../../components/ui';
 import { MOCK_PROGRAMS, MOCK_BATCHES, MOCK_SEMESTERS } from '../../mock/mockData';
 
 export const RegisterStudentPage: React.FC = () => {
+  const { registerStudent } = useAuth();
   const navigate = useNavigate();
 
   const [formData, setFormData] = useState({
@@ -84,12 +86,30 @@ export const RegisterStudentPage: React.FC = () => {
 
     setIsLoading(true);
     try {
-      // Simulate registration flow without auto-login (Phase 3 will handle backend persistence)
-      await new Promise((resolve) => setTimeout(resolve, 600));
+      await registerStudent({
+        email: formData.email.trim(),
+        password: formData.password,
+        name: formData.name.trim(),
+        fatherName: formData.fatherName.trim(),
+        kmuRegistrationNo: formData.kmuRegistrationNo.trim(),
+        program: formData.program,
+        department: formData.department,
+        batch: formData.batch,
+        semester: formData.semester,
+      });
+
       setIsRegistered(true);
     } catch (err: unknown) {
       const error = err as { code?: string; message?: string };
-      setErrorMessage(error.message || 'Registration failed. Please verify your details.');
+      if (error.code === 'auth/email-already-in-use') {
+        setErrorMessage('This email address is already registered. Please sign in or use another email.');
+      } else if (error.code === 'auth/invalid-email') {
+        setErrorMessage('Please provide a valid institutional email address format.');
+      } else if (error.code === 'auth/weak-password') {
+        setErrorMessage('Password must be at least 6 characters long.');
+      } else {
+        setErrorMessage(error.message || 'Registration failed. Please verify your details.');
+      }
     } finally {
       setIsLoading(false);
     }

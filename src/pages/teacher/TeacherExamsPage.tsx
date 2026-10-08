@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   SearchBar,
   Select,
@@ -21,22 +21,41 @@ import {
   EmptyState,
 } from '../../components/ui';
 import {
-  MOCK_EXAMS,
   MOCK_PROGRAMS,
   MOCK_SEMESTERS,
-  MOCK_QUESTIONS,
 } from '../../mock/mockData';
+import { useAuth } from '../../hooks/useAuth';
+import { examService } from '../../services/examService';
+import { questionService } from '../../services/questionService';
+import type { Exam } from '../../types/exam';
 import type { Question } from '../../types/question';
 
 export const TeacherExamsPage: React.FC = () => {
-  const [exams, setExams] = useState(MOCK_EXAMS);
+  const { currentUser, userProfile } = useAuth();
+  const [exams, setExams] = useState<Exam[]>([]);
   const [activeTab, setActiveTab] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
 
+  // Load teacher's exams
+  const fetchTeacherExams = async () => {
+    try {
+      if (currentUser) {
+        const fetched = await examService.getExamsByTeacher(currentUser.uid);
+        setExams(fetched);
+      }
+    } catch (err) {
+      console.error('Error fetching teacher exams:', err);
+    }
+  };
+
+  useEffect(() => {
+    fetchTeacherExams();
+  }, [currentUser]);
+
   // Exam Create/Edit Modal State
   const [isExamModalOpen, setIsExamModalOpen] = useState(false);
-  const [editingExam, setEditingExam] = useState<typeof MOCK_EXAMS[0] | null>(null);
+  const [editingExam, setEditingExam] = useState<Exam | null>(null);
   const [examForm, setExamForm] = useState({
     title: '',
     subject: '',
@@ -54,7 +73,7 @@ export const TeacherExamsPage: React.FC = () => {
   });
 
   // Question Management Modal State
-  const [selectedExamForQuestions, setSelectedExamForQuestions] = useState<typeof MOCK_EXAMS[0] | null>(null);
+  const [selectedExamForQuestions, setSelectedExamForQuestions] = useState<Exam | null>(null);
   const [questionsList, setQuestionsList] = useState<Question[]>([]);
   const [isQuestionFormOpen, setIsQuestionFormOpen] = useState(false);
   const [editingQuestion, setEditingQuestion] = useState<Question | null>(null);
@@ -81,7 +100,7 @@ export const TeacherExamsPage: React.FC = () => {
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       const matchTitle = e.title.toLowerCase().includes(q);
-      const matchSubject = e.subject.toLowerCase().includes(q);
+      const matchSubject = (e.subject || '').toLowerCase().includes(q);
       if (!matchTitle && !matchSubject) return false;
     }
     return true;
@@ -108,98 +127,101 @@ export const TeacherExamsPage: React.FC = () => {
     setIsExamModalOpen(true);
   };
 
-  const handleOpenEditModal = (exam: typeof MOCK_EXAMS[0]) => {
+  const handleOpenEditModal = (exam: Exam) => {
     setEditingExam(exam);
     setExamForm({
       title: exam.title,
-      subject: exam.subject,
+      subject: exam.subject || '',
       type: exam.type,
       semester: exam.semester,
       program: exam.program,
       duration: exam.duration,
       totalMarks: exam.totalMarks,
-      passingMarks: exam.passingMarks,
-      startAt: '2026-10-15T09:00',
-      endAt: '2026-10-15T11:00',
-      description: exam.description,
-      instructions: 'Please answer all questions carefully.',
+      passingMarks: exam.passingMarks || Math.round(exam.totalMarks * 0.5),
+      startAt: typeof exam.startAt === 'string' ? exam.startAt : '2026-10-15T09:00',
+      endAt: typeof exam.endAt === 'string' ? exam.endAt : '2026-10-15T11:00',
+      description: exam.description || '',
+      instructions: exam.instructions || 'Please answer all questions carefully.',
       status: exam.status,
     });
     setIsExamModalOpen(true);
   };
 
-  const handleSaveExam = (e: React.FormEvent) => {
+  const handleSaveExam = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (editingExam) {
-      // Update
-      setExams((prev) =>
-        prev.map((item) =>
-          item.id === editingExam.id
-            ? {
-                ...item,
-                ...examForm,
-                updatedAt: new Date().toISOString(),
-              }
-            : item
-        )
-      );
-      setNotification(`Exam "${examForm.title}" updated successfully!`);
-    } else {
-      // Create
-      const newExam: (typeof MOCK_EXAMS)[0] = {
-        id: `exam-${Date.now()}`,
-        title: examForm.title,
-        description: examForm.description,
-        subject: examForm.subject,
-        type: examForm.type,
-        teacherId: 'teacher-1',
-        teacherName: 'Dr. Tariq Shah, PhD',
-        semester: examForm.semester,
-        program: examForm.program,
-        duration: Number(examForm.duration),
-        totalMarks: Number(examForm.totalMarks),
-        passingMarks: Number(examForm.passingMarks),
-        questionCount: 0,
-        startAt: examForm.startAt,
-        endAt: examForm.endAt,
-        status: examForm.status,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      setExams((prev) => [newExam, ...prev]);
-      setNotification(`New exam "${examForm.title}" created successfully in Draft mode!`);
+    if (!currentUser) return;
+
+    try {
+      if (editingExam) {
+        // Update in Firestore
+        await examService.updateExam(editingExam.id, {
+          ...examForm,
+          duration: Number(examForm.duration),
+          totalMarks: Number(examForm.totalMarks),
+          passingMarks: Number(examForm.passingMarks),
+        });
+        setNotification(`Exam "${examForm.title}" updated successfully!`);
+      } else {
+        // Create in Firestore
+        await examService.createExam({
+          ...examForm,
+          teacherId: currentUser.uid,
+          teacherName: userProfile?.name || 'Faculty Member',
+          duration: Number(examForm.duration),
+          totalMarks: Number(examForm.totalMarks),
+          passingMarks: Number(examForm.passingMarks),
+          questionCount: 0,
+        });
+        setNotification(`New exam "${examForm.title}" created successfully in Draft mode!`);
+      }
+      fetchTeacherExams();
+    } catch (err) {
+      console.error('Error saving exam:', err);
     }
 
     setIsExamModalOpen(false);
     setTimeout(() => setNotification(null), 4000);
   };
 
-  const handleDuplicateExam = (exam: typeof MOCK_EXAMS[0]) => {
-    const dup: typeof MOCK_EXAMS[0] = {
-      ...exam,
-      id: `exam-dup-${Date.now()}`,
-      title: `${exam.title} (Copy)`,
-      status: 'draft',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    setExams((prev) => [dup, ...prev]);
-    setNotification(`Exam duplicated successfully as a Draft!`);
+  const handleDuplicateExam = async (exam: Exam) => {
+    if (!currentUser) return;
+    try {
+      await examService.createExam({
+        ...exam,
+        title: `${exam.title} (Copy)`,
+        status: 'draft',
+        teacherId: currentUser.uid,
+        teacherName: userProfile?.name || 'Faculty Member',
+      });
+      setNotification(`Exam duplicated successfully as a Draft!`);
+      fetchTeacherExams();
+    } catch (err) {
+      console.error('Error duplicating exam:', err);
+    }
     setTimeout(() => setNotification(null), 3000);
   };
 
-  const handleDeleteExam = (examId: string) => {
-    setExams((prev) => prev.filter((e) => e.id !== examId));
+  const handleDeleteExam = async (examId: string) => {
+    try {
+      await examService.deleteExam(examId);
+      setNotification('Exam paper deleted.');
+      fetchTeacherExams();
+    } catch (err) {
+      console.error('Error deleting exam:', err);
+    }
     setShowDeleteExamConfirm(null);
-    setNotification('Exam paper deleted.');
     setTimeout(() => setNotification(null), 3000);
   };
 
   // Handlers for Question Management
-  const handleOpenQuestionManager = (exam: typeof MOCK_EXAMS[0]) => {
+  const handleOpenQuestionManager = async (exam: Exam) => {
     setSelectedExamForQuestions(exam);
-    const qs = MOCK_QUESTIONS[exam.id] || MOCK_QUESTIONS['exam-1'] || [];
-    setQuestionsList(qs);
+    try {
+      const qs = await questionService.getQuestionsByExamId(exam.id);
+      setQuestionsList(qs);
+    } catch (err) {
+      console.error('Error loading questions for exam:', err);
+    }
   };
 
   const handleOpenAddQuestion = () => {
@@ -218,45 +240,60 @@ export const TeacherExamsPage: React.FC = () => {
     setIsQuestionFormOpen(true);
   };
 
-  const handleSaveQuestion = (e: React.FormEvent) => {
+  const handleSaveQuestion = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!selectedExamForQuestions) return;
+
     const opts =
       questionForm.type === 'mcq'
         ? [questionForm.optionA, questionForm.optionB, questionForm.optionC, questionForm.optionD]
         : ['True', 'False'];
 
+    let updatedList: Question[] = [];
     if (editingQuestion) {
-      setQuestionsList((prev) =>
-        prev.map((q) =>
-          q.id === editingQuestion.id
-            ? {
-                ...q,
-                question: questionForm.question,
-                options: opts,
-                correctAnswer: questionForm.correctAnswer,
-                marks: Number(questionForm.marks),
-              }
-            : q
-        )
+      updatedList = questionsList.map((q) =>
+        q.id === editingQuestion.id
+          ? {
+              ...q,
+              question: questionForm.question,
+              options: opts,
+              correctAnswer: questionForm.correctAnswer,
+              marks: Number(questionForm.marks),
+            }
+          : q
       );
     } else {
       const newQ: Question = {
         id: `q-${Date.now()}`,
-        examId: selectedExamForQuestions?.id || 'exam-1',
+        examId: selectedExamForQuestions.id,
         question: questionForm.question,
         options: opts,
         correctAnswer: questionForm.correctAnswer,
         marks: Number(questionForm.marks),
         order: questionsList.length + 1,
       };
-      setQuestionsList((prev) => [...prev, newQ]);
+      updatedList = [...questionsList, newQ];
+    }
+
+    setQuestionsList(updatedList);
+    try {
+      await questionService.saveQuestionsForExam(selectedExamForQuestions.id, updatedList);
+    } catch (err) {
+      console.error('Error saving questions batch:', err);
     }
 
     setIsQuestionFormOpen(false);
   };
 
-  const handleDeleteQuestion = (qId: string) => {
-    setQuestionsList((prev) => prev.filter((q) => q.id !== qId));
+  const handleDeleteQuestion = async (qId: string) => {
+    if (!selectedExamForQuestions) return;
+    const updated = questionsList.filter((q) => q.id !== qId);
+    setQuestionsList(updated);
+    try {
+      await questionService.saveQuestionsForExam(selectedExamForQuestions.id, updated);
+    } catch (err) {
+      console.error('Error saving updated question list:', err);
+    }
   };
 
   return (

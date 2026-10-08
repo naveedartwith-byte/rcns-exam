@@ -27,6 +27,15 @@ export const examService = {
   },
 
   /**
+   * Retrieves all exams across the institution.
+   */
+  async getAllExams(): Promise<Exam[]> {
+    const examsCol = collection(db, 'exams');
+    const snapshot = await getDocs(examsCol);
+    return snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Exam));
+  },
+
+  /**
    * Retrieves exams created by a specific teacher.
    */
   async getExamsByTeacher(teacherId: string): Promise<Exam[]> {
@@ -35,6 +44,7 @@ export const examService = {
     const snapshot = await getDocs(q);
     return snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Exam));
   },
+
 
   /**
    * Retrieves exams for a specific program and semester.

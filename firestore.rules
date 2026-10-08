@@ -77,8 +77,8 @@ service cloud.firestore {
     // KMU REGISTRATION UNIQUE REGISTRY
     // =========================================================================
     match /kmuRegistrations/{normalizedKmuReg} {
-      // Authenticated users can check if a KMU reg exists to prevent collisions
-      allow read: if isAuthenticated();
+      // Allow read for KMU login resolution before authentication
+      allow read: if true;
       
       // Created on registration if it does not already exist
       allow create: if isAuthenticated() &&
@@ -87,6 +87,14 @@ service cloud.firestore {
         
       // Only Admin or the owning student can update/delete their KMU registration claim
       allow update, delete: if isAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid);
+    }
+
+    // =========================================================================
+    // SYSTEM SETTINGS COLLECTION
+    // =========================================================================
+    match /settings/{settingId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
     }
 
     // =========================================================================

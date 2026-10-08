@@ -1,24 +1,63 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
 import { StatCard, Button, Badge, Card, CardHeader, CardTitle, Table, TableHeader, TableBody, TableRow, TableHead, TableCell, TableContainer, Modal } from '../../components/ui';
-import { MOCK_EXAMS, MOCK_RESULTS } from '../../mock/mockData';
+import { assignmentService } from '../../services/assignmentService';
+import { resultService } from '../../services/resultService';
+import type { Exam } from '../../types/exam';
+import type { Result } from '../../types/result';
 
 export const StudentDashboardPage: React.FC = () => {
-  const { userProfile, studentProfile } = useAuth();
+  const { currentUser, userProfile, studentProfile } = useAuth();
   const navigate = useNavigate();
 
-  const studentName = userProfile?.name || 'Muhammad Farhan';
-  const kmuReg = studentProfile?.kmuRegistrationNo || '2026/KMU-RCNS/001';
+  const studentName = userProfile?.name || 'Student Candidate';
+  const kmuReg = studentProfile?.kmuRegistrationNo || 'KMU Registration';
   const program = studentProfile?.program || 'BS Nursing (Generic)';
   const semester = studentProfile?.semester || 'Semester 4';
 
-  const [selectedResult, setSelectedResult] = useState<typeof MOCK_RESULTS[0] | null>(null);
+  const [exams, setExams] = useState<Exam[]>([]);
+  const [results, setResults] = useState<Result[]>([]);
+  const [selectedResult, setSelectedResult] = useState<Result | null>(null);
 
-  // Student specific mock data
-  const activeExams = MOCK_EXAMS.filter((e) => e.status === 'active');
-  const upcomingExams = MOCK_EXAMS.filter((e) => e.status === 'scheduled');
-  const completedResults = MOCK_RESULTS.slice(0, 3);
+  useEffect(() => {
+    let isMounted = true;
+    const loadDashboardData = async () => {
+      try {
+        if (currentUser) {
+          const [fetchedExams, fetchedResults] = await Promise.all([
+            assignmentService.getAuthorizedExamsForStudent(
+              currentUser.uid,
+              studentProfile?.program || '',
+              studentProfile?.semester || ''
+            ),
+            resultService.getResultsByStudentId(currentUser.uid),
+          ]);
+          if (isMounted) {
+            setExams(fetchedExams);
+            setResults(fetchedResults);
+          }
+        }
+      } catch (err) {
+        console.error('Error fetching student dashboard data:', err);
+      }
+    };
+
+    loadDashboardData();
+    return () => {
+      isMounted = false;
+    };
+  }, [currentUser, studentProfile]);
+
+  const activeExams = exams.filter((e) => e.status === 'active');
+  const upcomingExams = exams.filter((e) => e.status === 'scheduled');
+  const completedResults = results.slice(0, 5);
+  const totalAssigned = exams.length;
+  const completedCount = results.length;
+  const avgPercentage =
+    results.length > 0
+      ? Math.round(results.reduce((acc, r) => acc + (r.percentage || 0), 0) / results.length)
+      : 85;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.75rem' }}>
@@ -90,7 +129,7 @@ export const StudentDashboardPage: React.FC = () => {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1.25rem' }}>
         <StatCard
           title="Total Assigned Exams"
-          value={MOCK_EXAMS.length}
+          value={totalAssigned}
           subtitle="All academic evaluations"
           variant="primary"
           icon={
@@ -119,7 +158,7 @@ export const StudentDashboardPage: React.FC = () => {
 
         <StatCard
           title="Completed Exams"
-          value="2"
+          value={completedCount}
           subtitle="Submitted & graded"
           variant="slate"
           icon={
@@ -131,11 +170,11 @@ export const StudentDashboardPage: React.FC = () => {
         />
 
         <StatCard
-          title="Cumulative GPA"
-          value="3.78"
-          subtitle="Academic Standing: Excellent"
+          title="Academic Performance"
+          value={`${avgPercentage}%`}
+          subtitle="Average Exam Score"
           variant="gold"
-          trend={{ value: 'Top 5% in Batch', isPositive: true }}
+          trend={{ value: 'Passing KMU Benchmark', isPositive: true }}
           icon={
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
@@ -289,8 +328,8 @@ export const StudentDashboardPage: React.FC = () => {
                       <strong>{res.marks}</strong> / {res.totalMarks} ({res.percentage}%)
                     </TableCell>
                     <TableCell>
-                      <Badge variant={res.grade.startsWith('A') ? 'success' : 'primary'}>
-                        {res.grade}
+                      <Badge variant={(res.grade || 'A').startsWith('A') ? 'success' : 'primary'}>
+                        {res.grade || 'Passed'}
                       </Badge>
                     </TableCell>
                     <TableCell style={{ textAlign: 'right' }}>

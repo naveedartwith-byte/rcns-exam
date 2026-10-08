@@ -8,12 +8,17 @@ export interface Exam {
   id: string;
   title: string;
   description: string;
+  subject?: string;
   type: ExamType;
   teacherId: string;
+  teacherName?: string;
   semester: string;
   program: string;
   duration: number; // in minutes
   totalMarks: number;
+  passingMarks?: number;
+  questionCount?: number;
+  instructions?: string;
   startAt: Timestamp | string;
   endAt: Timestamp | string;
   status: ExamStatus;

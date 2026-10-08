@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
 import {
@@ -16,16 +16,44 @@ import {
   TableCell,
   TableContainer,
 } from '../../components/ui';
-import { MOCK_EXAMS, MOCK_STUDENTS } from '../../mock/mockData';
+import { examService } from '../../services/examService';
+import { studentService } from '../../services/studentService';
+import type { Exam } from '../../types/exam';
 
 export const TeacherDashboardPage: React.FC = () => {
-  const { userProfile, teacherProfile } = useAuth();
+  const { currentUser, userProfile, teacherProfile } = useAuth();
   const navigate = useNavigate();
 
-  const teacherName = userProfile?.name || 'Dr. Tariq Shah, PhD';
+  const teacherName = userProfile?.name || 'Faculty Examiner';
   const department = teacherProfile?.department || 'Nursing & Allied Health Sciences';
 
-  const teacherExams = MOCK_EXAMS;
+  const [teacherExams, setTeacherExams] = useState<Exam[]>([]);
+  const [totalStudents, setTotalStudents] = useState<number>(0);
+
+  useEffect(() => {
+    let isMounted = true;
+    const fetchTeacherData = async () => {
+      try {
+        if (currentUser) {
+          const [exams, students] = await Promise.all([
+            examService.getExamsByTeacher(currentUser.uid),
+            studentService.getAllStudents(),
+          ]);
+          if (isMounted) {
+            setTeacherExams(exams);
+            setTotalStudents(students.length);
+          }
+        }
+      } catch (err) {
+        console.error('Error loading teacher dashboard data:', err);
+      }
+    };
+    fetchTeacherData();
+    return () => {
+      isMounted = false;
+    };
+  }, [currentUser]);
+
   const activeExams = teacherExams.filter((e) => e.status === 'active');
   const draftExams = teacherExams.filter((e) => e.status === 'draft');
 
@@ -135,7 +163,7 @@ export const TeacherDashboardPage: React.FC = () => {
 
         <StatCard
           title="Enrolled Candidates"
-          value={MOCK_STUDENTS.length}
+          value={totalStudents}
           subtitle="Department students"
           variant="slate"
           icon={
@@ -243,7 +271,7 @@ export const TeacherDashboardPage: React.FC = () => {
                 <TableRow key={exam.id}>
                   <TableCell>
                     <div style={{ fontWeight: 700, color: 'var(--color-slate-900)' }}>{exam.title}</div>
-                    <div style={{ fontSize: '0.8rem', color: 'var(--color-slate-500)' }}>{exam.subject}</div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--color-slate-500)' }}>{exam.subject || 'Clinical Assessment'}</div>
                   </TableCell>
                   <TableCell>
                     <Badge variant="outline">{exam.type.toUpperCase()}</Badge>
@@ -254,7 +282,7 @@ export const TeacherDashboardPage: React.FC = () => {
                   </TableCell>
                   <TableCell>{exam.duration} mins</TableCell>
                   <TableCell>
-                    <strong>{exam.totalMarks}</strong> (Pass: {exam.passingMarks})
+                    <strong>{exam.totalMarks}</strong> (Pass: {exam.passingMarks || Math.round(exam.totalMarks * 0.5)})
                   </TableCell>
                   <TableCell>
                     <Badge

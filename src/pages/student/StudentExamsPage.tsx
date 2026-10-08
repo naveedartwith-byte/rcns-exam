@@ -10,25 +10,62 @@ import {
   ConfirmDialog,
   EmptyState,
 } from '../../components/ui';
-import { MOCK_EXAMS, MOCK_QUESTIONS } from '../../mock/mockData';
+import { useAuth } from '../../hooks/useAuth';
+import { assignmentService } from '../../services/assignmentService';
+import { questionService } from '../../services/questionService';
+import { resultService } from '../../services/resultService';
+import type { Exam } from '../../types/exam';
+import type { Question } from '../../types/question';
 
 export const StudentExamsPage: React.FC = () => {
+  const { currentUser, userProfile, studentProfile } = useAuth();
+
+  const [exams, setExams] = useState<Exam[]>([]);
   const [activeTab, setActiveTab] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
 
   // Exam Attempt State (Interactive Testing Screen)
-  const [takingExam, setTakingExam] = useState<typeof MOCK_EXAMS[0] | null>(null);
+  const [takingExam, setTakingExam] = useState<Exam | null>(null);
+  const [examQuestions, setExamQuestions] = useState<Omit<Question, 'correctAnswer' | 'explanation'>[]>([]);
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [selectedAnswers, setSelectedAnswers] = useState<Record<number, number>>({});
   const [flaggedQuestions, setFlaggedQuestions] = useState<Record<number, boolean>>({});
   const [timeLeftSeconds, setTimeLeftSeconds] = useState(3600);
   const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
   const [examSubmitted, setExamSubmitted] = useState(false);
-  const [examScoreSummary, setExamScoreSummary] = useState<{ score: number; total: number; percentage: number } | null>(null);
+  const [examScoreSummary, setExamScoreSummary] = useState<{
+    score: number;
+    total: number;
+    percentage: number;
+    passed: boolean;
+  } | null>(null);
+
+  // Load authorized exams
+  useEffect(() => {
+    let isMounted = true;
+    const fetchExams = async () => {
+      try {
+        if (currentUser) {
+          const authorized = await assignmentService.getAuthorizedExamsForStudent(
+            currentUser.uid,
+            studentProfile?.program || '',
+            studentProfile?.semester || ''
+          );
+          if (isMounted) setExams(authorized);
+        }
+      } catch (err) {
+        console.error('Error loading authorized student exams:', err);
+      }
+    };
+    fetchExams();
+    return () => {
+      isMounted = false;
+    };
+  }, [currentUser, studentProfile]);
 
   // Filtered exams list
-  const filteredExams = MOCK_EXAMS.filter((exam) => {
+  const filteredExams = exams.filter((exam) => {
     // Tab filter
     if (activeTab === 'available' && exam.status !== 'active') return false;
     if (activeTab === 'scheduled' && exam.status !== 'scheduled') return false;
@@ -41,8 +78,8 @@ export const StudentExamsPage: React.FC = () => {
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       const matchTitle = exam.title.toLowerCase().includes(q);
-      const matchSubject = exam.subject.toLowerCase().includes(q);
-      const matchTeacher = exam.teacherName.toLowerCase().includes(q);
+      const matchSubject = (exam.subject || '').toLowerCase().includes(q);
+      const matchTeacher = (exam.teacherName || '').toLowerCase().includes(q);
       if (!matchTitle && !matchSubject && !matchTeacher) return false;
     }
 
@@ -66,7 +103,7 @@ export const StudentExamsPage: React.FC = () => {
     return () => clearInterval(timer);
   }, [takingExam, examSubmitted, timeLeftSeconds]);
 
-  const handleStartExam = (exam: typeof MOCK_EXAMS[0]) => {
+  const handleStartExam = async (exam: Exam) => {
     setTakingExam(exam);
     setCurrentQuestionIndex(0);
     setSelectedAnswers({});
@@ -74,6 +111,13 @@ export const StudentExamsPage: React.FC = () => {
     setTimeLeftSeconds(exam.duration * 60);
     setExamSubmitted(false);
     setExamScoreSummary(null);
+
+    try {
+      const questions = await questionService.getStudentQuestions(exam.id);
+      setExamQuestions(questions);
+    } catch (err) {
+      console.error('Error loading student sanitized questions:', err);
+    }
   };
 
   const handleSelectOption = (optIndex: number) => {
@@ -98,29 +142,40 @@ export const StudentExamsPage: React.FC = () => {
     });
   };
 
-  const handleFinalSubmit = () => {
+  const handleFinalSubmit = async () => {
     setShowSubmitConfirm(false);
-    setExamSubmitted(true);
+    if (!takingExam || !currentUser) return;
 
-    const questions = takingExam ? MOCK_QUESTIONS[takingExam.id] || MOCK_QUESTIONS['exam-1'] : [];
-    let correctCount = 0;
-    let totalScore = 0;
-    let maxMarks = 0;
+    try {
+      const result = await resultService.submitExamAttempt({
+        studentId: currentUser.uid,
+        studentName: userProfile?.name || 'Student Candidate',
+        kmuRegistrationNo: studentProfile?.kmuRegistrationNo || '',
+        examId: takingExam.id,
+        examTitle: takingExam.title,
+        examType: takingExam.type,
+        subject: takingExam.subject || 'Clinical Assessment',
+        program: studentProfile?.program || takingExam.program,
+        semester: studentProfile?.semester || takingExam.semester,
+        batch: studentProfile?.batch || '',
+        answers: selectedAnswers,
+      });
 
-    questions.forEach((q, idx) => {
-      maxMarks += q.marks;
-      if (selectedAnswers[idx] === q.correctAnswer) {
-        correctCount++;
-        totalScore += q.marks;
-      }
-    });
+      setExamSubmitted(true);
+      setExamScoreSummary({
+        score: result.marks,
+        total: result.totalMarks,
+        percentage: result.percentage,
+        passed: result.passed ?? result.percentage >= 50,
+      });
 
-    const percent = Math.round((totalScore / (maxMarks || 1)) * 100);
-    setExamScoreSummary({
-      score: totalScore,
-      total: maxMarks,
-      percentage: percent,
-    });
+      // Update local exam status to completed
+      setExams((prev) =>
+        prev.map((e) => (e.id === takingExam.id ? { ...e, status: 'completed' } : e))
+      );
+    } catch (err) {
+      console.error('Error submitting exam:', err);
+    }
   };
 
   const formatTimer = (seconds: number) => {
@@ -130,7 +185,7 @@ export const StudentExamsPage: React.FC = () => {
   };
 
   // Questions for current exam
-  const currentExamQuestions = takingExam ? MOCK_QUESTIONS[takingExam.id] || MOCK_QUESTIONS['exam-1'] : [];
+  const currentExamQuestions = examQuestions;
   const currentQuestion = currentExamQuestions[currentQuestionIndex];
   const totalQuestions = currentExamQuestions.length;
   const answeredCount = Object.keys(selectedAnswers).length;
@@ -169,10 +224,10 @@ export const StudentExamsPage: React.FC = () => {
           onChange={setActiveTab}
           variant="pills"
           tabs={[
-            { id: 'all', label: 'All Exams', badge: MOCK_EXAMS.length },
-            { id: 'available', label: 'Available Now', badge: MOCK_EXAMS.filter((e) => e.status === 'active').length },
-            { id: 'scheduled', label: 'Upcoming / Scheduled', badge: MOCK_EXAMS.filter((e) => e.status === 'scheduled').length },
-            { id: 'completed', label: 'Completed', badge: MOCK_EXAMS.filter((e) => e.status === 'completed').length },
+            { id: 'all', label: 'All Exams', badge: exams.length },
+            { id: 'available', label: 'Available Now', badge: exams.filter((e) => e.status === 'active').length },
+            { id: 'scheduled', label: 'Upcoming / Scheduled', badge: exams.filter((e) => e.status === 'scheduled').length },
+            { id: 'completed', label: 'Completed', badge: exams.filter((e) => e.status === 'completed').length },
           ]}
         />
 

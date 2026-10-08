@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   SearchBar,
   Select,
@@ -16,18 +16,37 @@ import {
   ConfirmDialog,
   Alert,
   EmptyState,
+  LoadingSpinner,
 } from '../../components/ui';
-import { MOCK_EXAMS } from '../../mock/mockData';
+import { examService } from '../../services/examService';
+import type { Exam } from '../../types/exam';
 
 export const AdminExamsPage: React.FC = () => {
-  const [exams, setExams] = useState(MOCK_EXAMS);
+  const [exams, setExams] = useState<Exam[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
 
-  const [selectedExam, setSelectedExam] = useState<typeof MOCK_EXAMS[0] | null>(null);
+  const [selectedExam, setSelectedExam] = useState<Exam | null>(null);
   const [deleteExamId, setDeleteExamId] = useState<string | null>(null);
   const [notification, setNotification] = useState<string | null>(null);
+
+  const fetchExams = async () => {
+    try {
+      setLoading(true);
+      const fetched = await examService.getAllExams();
+      setExams(fetched);
+    } catch (err) {
+      console.error('Error fetching admin exams:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchExams();
+  }, []);
 
   const filteredExams = exams.filter((e) => {
     if (typeFilter !== 'all' && e.type !== typeFilter) return false;
@@ -35,26 +54,34 @@ export const AdminExamsPage: React.FC = () => {
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       const matchTitle = e.title.toLowerCase().includes(q);
-      const matchSubject = e.subject.toLowerCase().includes(q);
-      const matchTeacher = e.teacherName.toLowerCase().includes(q);
+      const matchSubject = (e.subject || '').toLowerCase().includes(q);
+      const matchTeacher = (e.teacherName || '').toLowerCase().includes(q);
       if (!matchTitle && !matchSubject && !matchTeacher) return false;
     }
     return true;
   });
 
-  const handleDeleteExam = () => {
+  const handleDeleteExam = async () => {
     if (!deleteExamId) return;
-    setExams((prev) => prev.filter((e) => e.id !== deleteExamId));
+    try {
+      await examService.deleteExam(deleteExamId);
+      setNotification('Examination record deleted from system registry.');
+      fetchExams();
+    } catch (err) {
+      console.error('Error deleting exam:', err);
+    }
     setDeleteExamId(null);
-    setNotification('Examination record deleted from system registry.');
     setTimeout(() => setNotification(null), 3000);
   };
 
-  const handleArchiveExam = (exam: typeof MOCK_EXAMS[0]) => {
-    setExams((prev) =>
-      prev.map((e) => (e.id === exam.id ? { ...e, status: 'archived' as const } : e))
-    );
-    setNotification(`Exam "${exam.title}" has been archived.`);
+  const handleArchiveExam = async (exam: Exam) => {
+    try {
+      await examService.updateExam(exam.id, { status: 'archived' });
+      setNotification(`Exam "${exam.title}" has been archived.`);
+      fetchExams();
+    } catch (err) {
+      console.error('Error archiving exam:', err);
+    }
     setTimeout(() => setNotification(null), 3000);
   };
 
@@ -120,7 +147,9 @@ export const AdminExamsPage: React.FC = () => {
       </Card>
 
       {/* Exams Master Table */}
-      {filteredExams.length === 0 ? (
+      {loading ? (
+        <LoadingSpinner text="Loading examination roster..." />
+      ) : filteredExams.length === 0 ? (
         <EmptyState
           title="No Examination Papers Found"
           description="Try modifying search keywords or resetting filters."

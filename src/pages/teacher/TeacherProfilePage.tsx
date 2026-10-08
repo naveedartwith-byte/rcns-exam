@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../hooks/useAuth';
+import { teacherService } from '../../services/teacherService';
 import {
   Card,
   Avatar,
@@ -11,28 +12,56 @@ import {
 } from '../../components/ui';
 
 export const TeacherProfilePage: React.FC = () => {
-  const { userProfile, teacherProfile } = useAuth();
+  const { currentUser, userProfile, teacherProfile } = useAuth();
 
   const [teacherData, setTeacherData] = useState({
-    name: userProfile?.name || 'Dr. Tariq Shah, PhD',
-    email: userProfile?.email || 'dr.tariq@royalcollege.edu.pk',
+    name: userProfile?.name || 'Faculty Member',
+    email: userProfile?.email || '',
     department: teacherProfile?.department || 'Nursing & Allied Health Sciences',
-    designation: 'Associate Professor & Head of Department',
-    phone: '+92 300 9112233',
+    designation: teacherProfile?.designation || 'Associate Professor',
+    phone: teacherProfile?.phone || '+92 300 9112233',
     office: 'Academic Block B, Room 204',
     specialization: 'Critical Care Nursing & Clinical Pharmacology',
-    courses: [
+    courses: teacherProfile?.courses || [
       'Adult Health Nursing I (NUR-201)',
       'Clinical Pharmacology (PHM-302)',
-      'Pathophysiology in Critical Care (NUR-401)',
     ],
   });
 
+  useEffect(() => {
+    if (userProfile || teacherProfile) {
+      setTeacherData((prev) => ({
+        ...prev,
+        name: userProfile?.name || prev.name,
+        email: userProfile?.email || prev.email,
+        department: teacherProfile?.department || prev.department,
+        designation: teacherProfile?.designation || prev.designation,
+        phone: teacherProfile?.phone || prev.phone,
+        courses: teacherProfile?.courses || prev.courses,
+      }));
+    }
+  }, [userProfile, teacherProfile]);
+
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
-  const handleSaveProfile = (e: React.FormEvent) => {
+  const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (currentUser) {
+      try {
+        setIsSaving(true);
+        await teacherService.updateTeacherProfile(currentUser.uid, {
+          name: teacherData.name,
+          phone: teacherData.phone,
+          designation: teacherData.designation,
+        });
+      } catch (err) {
+        console.error('Error updating teacher profile:', err);
+      } finally {
+        setIsSaving(false);
+      }
+    }
     setIsEditModalOpen(false);
     setSaveSuccess(true);
     setTimeout(() => setSaveSuccess(false), 3500);
@@ -159,7 +188,7 @@ export const TeacherProfilePage: React.FC = () => {
             <Button variant="outline" onClick={() => setIsEditModalOpen(false)}>
               Cancel
             </Button>
-            <Button variant="primary" onClick={handleSaveProfile} style={{ backgroundColor: '#0f2744' }}>
+            <Button variant="primary" onClick={handleSaveProfile} isLoading={isSaving} style={{ backgroundColor: '#0f2744' }}>
               Save Profile
             </Button>
           </>

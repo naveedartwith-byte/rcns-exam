@@ -11,6 +11,8 @@ import {
 import { db } from '../firebase/firestore';
 import type { Result } from '../types/result';
 import { calculatePercentage } from '../utils/validation';
+import { questionService } from './questionService';
+import { examService } from './examService';
 
 export const resultService = {
   /**
@@ -34,31 +36,125 @@ export const resultService = {
   },
 
   /**
-   * Records or submits an exam result.
+   * Retrieves all results across the institution (Admin view).
    */
-  async recordResult(resultData: {
+  async getAllResults(): Promise<Result[]> {
+    const resultsCol = collection(db, 'results');
+    const snapshot = await getDocs(resultsCol);
+    return snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Result));
+  },
+
+  /**
+   * Evaluates student exam answers, calculates marks and pass/fail,
+   * and creates an idempotent result document.
+   */
+  async submitExamAttempt(params: {
     examId: string;
     studentId: string;
-    marks: number;
-    totalMarks: number;
-    status?: Result['status'];
-  }): Promise<string> {
-    const resultsCol = collection(db, 'results');
-    const resultRef = doc(resultsCol);
-    const percentage = calculatePercentage(resultData.marks, resultData.totalMarks);
+    studentName?: string;
+    kmuRegistrationNo?: string;
+    examTitle?: string;
+    examType?: string;
+    subject?: string;
+    program?: string;
+    semester?: string;
+    batch?: string;
+    answers: Record<string, string | number>;
+  }): Promise<Result> {
+    const resultId = `${params.studentId}_${params.examId}`;
+    const resultRef = doc(db, 'results', resultId);
 
-    await setDoc(resultRef, {
-      id: resultRef.id,
-      examId: resultData.examId,
-      studentId: resultData.studentId,
-      marks: resultData.marks,
-      totalMarks: resultData.totalMarks,
+    // 1. Idempotency Check: Return existing result if already submitted
+    const existingSnap = await getDoc(resultRef);
+    if (existingSnap.exists()) {
+      return { id: existingSnap.id, ...existingSnap.data() } as Result;
+    }
+
+    // 2. Load authoritative questions with correct answers from Firestore
+    const questions = await questionService.getQuestionsByExamId(params.examId);
+    const exam = await examService.getExamById(params.examId);
+
+    let obtainedMarks = 0;
+    let totalMarks = 0;
+    let correctCount = 0;
+
+    for (const q of questions) {
+      const qMarks = Number(q.marks) || 1;
+      totalMarks += qMarks;
+
+      const submittedAnswer = params.answers[q.id];
+      if (submittedAnswer !== undefined && submittedAnswer !== null) {
+        // Compare answers safely
+        const isCorrect =
+          String(submittedAnswer).trim().toLowerCase() === String(q.correctAnswer).trim().toLowerCase();
+        if (isCorrect) {
+          obtainedMarks += qMarks;
+          correctCount++;
+        }
+      }
+    }
+
+    if (totalMarks === 0 && exam?.totalMarks) {
+      totalMarks = exam.totalMarks;
+    }
+
+    const percentage = calculatePercentage(obtainedMarks, totalMarks || 100);
+    const passingScore = 50; // Standard 50% passing threshold
+    const passed = percentage >= passingScore;
+
+    const grade =
+      percentage >= 85
+        ? 'A+'
+        : percentage >= 80
+        ? 'A'
+        : percentage >= 75
+        ? 'B+'
+        : percentage >= 70
+        ? 'B'
+        : percentage >= 60
+        ? 'C'
+        : percentage >= 50
+        ? 'D'
+        : 'F';
+
+    const resultData: Result = {
+      id: resultId,
+      examId: params.examId,
+      studentId: params.studentId,
+      studentName: params.studentName || 'Student',
+      kmuRegistrationNo: params.kmuRegistrationNo,
+      examTitle: params.examTitle || exam?.title || 'Academic Examination',
+      examType: params.examType || exam?.type || 'exam',
+      subject: params.subject || exam?.subject || 'Clinical Assessment',
+      grade,
+      program: params.program || exam?.program,
+      semester: params.semester || exam?.semester,
+      batch: params.batch,
+      marks: obtainedMarks,
+      totalMarks: totalMarks || 100,
       percentage,
-      status: resultData.status || 'graded',
-      submittedAt: serverTimestamp(),
-    });
+      passed,
+      answersCount: Object.keys(params.answers).length,
+      correctCount,
+      submittedAt: serverTimestamp() as any,
+      status: 'published',
+    };
 
-    return resultRef.id;
+    await setDoc(resultRef, resultData);
+
+    // Update assignment status to submitted
+    const assignmentId = `${params.examId}_${params.studentId}`;
+    try {
+      const assignRef = doc(db, 'assignments', assignmentId);
+      await setDoc(assignRef, { status: 'submitted' }, { merge: true });
+    } catch {
+      // assignment update is best-effort
+    }
+
+    return {
+      ...resultData,
+      submittedAt: new Date().toISOString(),
+    };
   },
 
   /**
@@ -73,3 +169,4 @@ export const resultService = {
 };
 
 export default resultService;
+

@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../hooks/useAuth';
+import { studentService } from '../../services/studentService';
 import {
   Card,
   Avatar,
@@ -11,29 +12,59 @@ import {
 } from '../../components/ui';
 
 export const StudentProfilePage: React.FC = () => {
-  const { userProfile, studentProfile } = useAuth();
+  const { currentUser, userProfile, studentProfile } = useAuth();
 
   const [studentData, setStudentData] = useState({
-    name: userProfile?.name || 'Muhammad Farhan',
-    fatherName: studentProfile?.fatherName || 'Akhtar Ali',
-    email: userProfile?.email || 'farhan.student@royalcollege.edu.pk',
-    kmuRegistrationNo: studentProfile?.kmuRegistrationNo || '2026/KMU-RCNS/001',
+    name: userProfile?.name || 'Student Candidate',
+    fatherName: studentProfile?.fatherName || '',
+    email: userProfile?.email || '',
+    kmuRegistrationNo: studentProfile?.kmuRegistrationNo || '',
     program: studentProfile?.program || 'BS Nursing (Generic)',
     department: studentProfile?.department || 'Nursing & Allied Health Sciences',
     batch: studentProfile?.batch || 'Batch 15th',
     semester: studentProfile?.semester || 'Semester 4',
-    phone: '+92 300 1234567',
-    address: 'Saidu Sharif, Swat, Khyber Pakhtunkhwa',
+    phone: studentProfile?.phone || '+92 300 1234567',
+    address: studentProfile?.address || 'Saidu Sharif, Swat, Khyber Pakhtunkhwa',
     bloodGroup: 'B+',
     status: 'active',
   });
+
+  useEffect(() => {
+    if (userProfile || studentProfile) {
+      setStudentData((prev) => ({
+        ...prev,
+        name: userProfile?.name || prev.name,
+        email: userProfile?.email || prev.email,
+        fatherName: studentProfile?.fatherName || prev.fatherName,
+        kmuRegistrationNo: studentProfile?.kmuRegistrationNo || prev.kmuRegistrationNo,
+        program: studentProfile?.program || prev.program,
+        department: studentProfile?.department || prev.department,
+        batch: studentProfile?.batch || prev.batch,
+        semester: studentProfile?.semester || prev.semester,
+        phone: studentProfile?.phone || prev.phone,
+        address: studentProfile?.address || prev.address,
+      }));
+    }
+  }, [userProfile, studentProfile]);
 
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
-  const handleSaveProfile = (e: React.FormEvent) => {
+  const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (currentUser) {
+      try {
+        await studentService.updateStudentProfile(currentUser.uid, {
+          name: studentData.name,
+          fatherName: studentData.fatherName,
+          phone: studentData.phone,
+          address: studentData.address,
+        });
+      } catch (err) {
+        console.error('Error updating student profile:', err);
+      }
+    }
     setIsEditModalOpen(false);
     setSaveSuccess(true);
     setTimeout(() => setSaveSuccess(false), 3500);

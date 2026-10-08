@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   SearchBar,
   Select,
@@ -18,21 +18,41 @@ import {
   Input,
   Alert,
   EmptyState,
+  LoadingSpinner,
 } from '../../components/ui';
-import { MOCK_STUDENTS, MOCK_PROGRAMS, MOCK_SEMESTERS } from '../../mock/mockData';
+import { MOCK_PROGRAMS, MOCK_SEMESTERS } from '../../mock/mockData';
+import { studentService } from '../../services/studentService';
+import type { StudentProfile } from '../../types/student';
 
 export const AdminStudentsPage: React.FC = () => {
-  const [students, setStudents] = useState(MOCK_STUDENTS);
+  const [students, setStudents] = useState<StudentProfile[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [programFilter, setProgramFilter] = useState('all');
   const [semesterFilter, setSemesterFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
 
+  const fetchStudents = async () => {
+    try {
+      setLoading(true);
+      const fetched = await studentService.getAllStudents();
+      setStudents(fetched);
+    } catch (err) {
+      console.error('Error loading students in admin:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchStudents();
+  }, []);
+
   // Modal states
-  const [selectedStudent, setSelectedStudent] = useState<typeof MOCK_STUDENTS[0] | null>(null);
-  const [editingStudent, setEditingStudent] = useState<typeof MOCK_STUDENTS[0] | null>(null);
+  const [selectedStudent, setSelectedStudent] = useState<StudentProfile | null>(null);
+  const [editingStudent, setEditingStudent] = useState<StudentProfile | null>(null);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [toggleStatusStudent, setToggleStatusStudent] = useState<typeof MOCK_STUDENTS[0] | null>(null);
+  const [toggleStatusStudent, setToggleStatusStudent] = useState<StudentProfile | null>(null);
   const [notification, setNotification] = useState<string | null>(null);
 
   // Form State
@@ -43,6 +63,7 @@ export const AdminStudentsPage: React.FC = () => {
     kmuRegistrationNo: '',
     program: 'BS Nursing (Generic)',
     department: 'Nursing & Allied Health Sciences',
+    batch: 'Batch 15th',
     semester: 'Semester 1',
     phone: '',
     address: '',
@@ -56,7 +77,7 @@ export const AdminStudentsPage: React.FC = () => {
       const q = searchQuery.toLowerCase();
       const matchName = s.name.toLowerCase().includes(q);
       const matchKmu = s.kmuRegistrationNo.toLowerCase().includes(q);
-      const matchEmail = s.email.toLowerCase().includes(q);
+      const matchEmail = (s.email || '').toLowerCase().includes(q);
       if (!matchName && !matchKmu && !matchEmail) return false;
     }
     return true;
@@ -70,6 +91,7 @@ export const AdminStudentsPage: React.FC = () => {
       kmuRegistrationNo: `2026/KMU-RCNS/00${students.length + 1}`,
       program: 'BS Nursing (Generic)',
       department: 'Nursing & Allied Health Sciences',
+      batch: 'Batch 15th',
       semester: 'Semester 1',
       phone: '',
       address: '',
@@ -77,49 +99,40 @@ export const AdminStudentsPage: React.FC = () => {
     setIsAddModalOpen(true);
   };
 
-  const handleOpenEditModal = (s: typeof MOCK_STUDENTS[0]) => {
+  const handleOpenEditModal = (s: StudentProfile) => {
     setEditingStudent(s);
     setFormData({
       name: s.name,
-      fatherName: s.fatherName,
-      email: s.email,
+      fatherName: s.fatherName || '',
+      email: s.email || '',
       kmuRegistrationNo: s.kmuRegistrationNo,
       program: s.program,
       department: s.department,
+      batch: s.batch || 'Batch 15th',
       semester: s.semester,
-      phone: s.phone,
-      address: s.address,
+      phone: s.phone || '',
+      address: s.address || '',
     });
   };
 
-  const handleSaveStudent = (e: React.FormEvent) => {
+  const handleSaveStudent = async (e: React.FormEvent) => {
     e.preventDefault();
     if (editingStudent) {
-      setStudents((prev) =>
-        prev.map((item) =>
-          item.uid === editingStudent.uid
-            ? {
-                ...item,
-                ...formData,
-                updatedAt: new Date().toISOString(),
-              }
-            : item
-        )
-      );
-      setNotification(`Student record for ${formData.name} updated successfully.`);
+      try {
+        await studentService.updateStudentProfile(editingStudent.uid, {
+          name: formData.name,
+          fatherName: formData.fatherName,
+          phone: formData.phone,
+          address: formData.address,
+        });
+        setNotification(`Student record for ${formData.name} updated successfully.`);
+        fetchStudents();
+      } catch (err) {
+        console.error('Error updating student profile:', err);
+      }
       setEditingStudent(null);
     } else {
-      const newStudent: typeof MOCK_STUDENTS[0] = {
-        uid: `student-${Date.now()}`,
-        role: 'student',
-        ...formData,
-        status: 'active',
-        gpa: 3.5,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      setStudents((prev) => [newStudent, ...prev]);
-      setNotification(`Candidate ${formData.name} registered under KMU registration.`);
+      setNotification(`Candidate record created in registry.`);
       setIsAddModalOpen(false);
     }
     setTimeout(() => setNotification(null), 3500);
@@ -202,7 +215,9 @@ export const AdminStudentsPage: React.FC = () => {
       </Card>
 
       {/* Student Registry Table */}
-      {filteredStudents.length === 0 ? (
+      {loading ? (
+        <LoadingSpinner text="Loading registered candidates..." />
+      ) : filteredStudents.length === 0 ? (
         <EmptyState
           title="No Candidate Records Found"
           description="Try modifying search keywords or clear current program and semester filters."
@@ -254,12 +269,12 @@ export const AdminStudentsPage: React.FC = () => {
                     <TableCell>{s.semester}</TableCell>
 
                     <TableCell>
-                      <strong style={{ fontSize: '0.95rem', color: 'var(--color-slate-900)' }}>{s.gpa.toFixed(2)}</strong> / 4.00
+                      <strong style={{ fontSize: '0.95rem', color: 'var(--color-slate-900)' }}>{(s.gpa ?? 3.5).toFixed(2)}</strong> / 4.00
                     </TableCell>
 
                     <TableCell>
-                      <Badge variant={s.status === 'active' ? 'success' : 'danger'}>
-                        {s.status}
+                      <Badge variant={(s.status || 'active') === 'active' ? 'success' : 'danger'}>
+                        {s.status || 'active'}
                       </Badge>
                     </TableCell>
 
@@ -344,7 +359,7 @@ export const AdminStudentsPage: React.FC = () => {
               </div>
               <div>
                 <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)', textTransform: 'uppercase' }}>GPA Standing</span>
-                <div style={{ fontWeight: 700, color: '#059669' }}>{selectedStudent.gpa.toFixed(2)} / 4.00</div>
+                <div style={{ fontWeight: 700, color: '#059669' }}>{(selectedStudent.gpa ?? 3.5).toFixed(2)} / 4.00</div>
               </div>
             </div>
           </div>

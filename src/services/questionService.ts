@@ -8,13 +8,16 @@ import {
   query,
   where,
   getDocs,
+  writeBatch,
 } from 'firebase/firestore';
 import { db } from '../firebase/firestore';
 import type { Question } from '../types/question';
 
+export type StudentQuestion = Omit<Question, 'correctAnswer' | 'explanation'>;
+
 export const questionService = {
   /**
-   * Retrieves all questions associated with an exam.
+   * Retrieves all questions associated with an exam (Teacher/Admin view with answers).
    */
   async getQuestionsByExamId(examId: string): Promise<Question[]> {
     const questionsCol = collection(db, 'questions');
@@ -22,6 +25,22 @@ export const questionService = {
     const snapshot = await getDocs(q);
     const questions = snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Question));
     return questions.sort((a, b) => a.order - b.order);
+  },
+
+  /**
+   * Retrieves questions for a student taking an exam.
+   * Strips correct answers and explanations to protect answer keys from client inspection.
+   */
+  async getStudentQuestions(examId: string): Promise<StudentQuestion[]> {
+    const fullQuestions = await this.getQuestionsByExamId(examId);
+    return fullQuestions.map((q) => ({
+      id: q.id,
+      examId: q.examId,
+      question: q.question,
+      options: q.options,
+      marks: q.marks,
+      order: q.order,
+    }));
   },
 
   /**
@@ -37,6 +56,37 @@ export const questionService = {
     });
 
     return questionRef.id;
+  },
+
+  /**
+   * Saves / synchronizes a list of questions for an exam in batch.
+   */
+  async saveQuestionsForExam(
+    examId: string,
+    questions: Array<Omit<Question, 'id'> & { id?: string }>
+  ): Promise<void> {
+    const batch = writeBatch(db);
+    const questionsCol = collection(db, 'questions');
+
+    // First delete any existing questions for this exam
+    const existing = await this.getQuestionsByExamId(examId);
+    for (const eq of existing) {
+      batch.delete(doc(db, 'questions', eq.id));
+    }
+
+    // Write the new questions
+    for (let i = 0; i < questions.length; i++) {
+      const qData = questions[i];
+      const qRef = qData.id ? doc(db, 'questions', qData.id) : doc(questionsCol);
+      batch.set(qRef, {
+        ...qData,
+        id: qRef.id,
+        examId,
+        order: i + 1,
+      });
+    }
+
+    await batch.commit();
   },
 
   /**
@@ -67,3 +117,4 @@ export const questionService = {
 };
 
 export default questionService;
+

@@ -50,6 +50,15 @@ export const studentService = {
   },
 
   /**
+   * Retrieves all student profiles in the institution.
+   */
+  async getAllStudents(): Promise<StudentProfile[]> {
+    const studentsCol = collection(db, 'students');
+    const snapshot = await getDocs(studentsCol);
+    return snapshot.docs.map((docSnap) => docSnap.data() as StudentProfile);
+  },
+
+  /**
    * Queries students by program and semester.
    */
   async getStudentsByProgramAndSemester(program: string, semester: string): Promise<StudentProfile[]> {
@@ -65,3 +74,4 @@ export const studentService = {
 };
 
 export default studentService;
+

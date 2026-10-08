@@ -12,6 +12,10 @@ export interface StudentProfile {
   semester: string;
   program: string;
   department: string;
+  phone?: string;
+  address?: string;
+  gpa?: number;
+  status?: 'active' | 'suspended' | 'inactive';
   createdAt: Timestamp | string;
   updatedAt: Timestamp | string;
 }
