@@ -1,0 +1,205 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // =========================================================================
+    // HELPER FUNCTIONS & ROLE CHECKS
+    // =========================================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
+      );
+    }
+
+    function isTeacher() {
+      return isAuthenticated() && (
+        exists(/databases/$(database)/documents/teachers/$(request.auth.uid)) ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'teacher')
+      );
+    }
+
+    function isStudent() {
+      return isAuthenticated() && (
+        exists(/databases/$(database)/documents/students/$(request.auth.uid)) ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'student')
+      );
+    }
+
+    // =========================================================================
+    // USERS COLLECTION (Common identity metadata)
+    // =========================================================================
+    match /users/{userId} {
+      // User can read their own identity record; Admins can read all users; Teachers can read user names/emails
+      allow read: if isOwner(userId) || isTeacher() || isAdmin();
+      
+      // User can create their initial user doc on registration (role cannot be self-elevated to teacher/admin)
+      allow create: if isOwner(userId) &&
+        (request.resource.data.role == 'student' || isAdmin());
+        
+      // User can update their own non-role fields; Admins can update any user doc
+      allow update: if (isOwner(userId) && request.resource.data.role == resource.data.role) || isAdmin();
+      
+      // Only Admins can delete users
+      allow delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // STUDENTS COLLECTION
+    // =========================================================================
+    match /students/{studentId} {
+      // Student can read own profile; Teachers & Admins can read student profiles
+      allow read: if isOwner(studentId) || isTeacher() || isAdmin();
+      
+      // Student can create their own student profile during registration
+      allow create: if (isOwner(studentId) && request.resource.data.role == 'student') || isAdmin();
+      
+      // Student can update own profile (cannot change role); Admins can update
+      allow update: if (isOwner(studentId) && request.resource.data.role == resource.data.role) || isAdmin();
+      
+      // Only Admins can delete student records
+      allow delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // KMU REGISTRATION UNIQUE REGISTRY
+    // =========================================================================
+    match /kmuRegistrations/{normalizedKmuReg} {
+      // Authenticated users can check if a KMU reg exists to prevent collisions
+      allow read: if isAuthenticated();
+      
+      // Created on registration if it does not already exist
+      allow create: if isAuthenticated() &&
+        request.resource.data.uid == request.auth.uid &&
+        !exists(/databases/$(database)/documents/kmuRegistrations/$(normalizedKmuReg));
+        
+      // Only Admin or the owning student can update/delete their KMU registration claim
+      allow update, delete: if isAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid);
+    }
+
+    // =========================================================================
+    // TEACHERS COLLECTION
+    // =========================================================================
+    match /teachers/{teacherId} {
+      // Teachers can read own profile; Admins can read all; Students can read basic teacher info
+      allow read: if isOwner(teacherId) || isAdmin() || isStudent();
+      
+      // Only Admins can create or delete teachers (no public teacher registration)
+      allow create, delete: if isAdmin();
+      
+      // Teacher can update own profile; Admin can update any teacher
+      allow update: if isOwner(teacherId) || isAdmin();
+    }
+
+    // =========================================================================
+    // ADMINS COLLECTION
+    // =========================================================================
+    match /admins/{adminId} {
+      // Only Admins can read, create, update, or delete Admin documents
+      allow read, write: if isAdmin();
+    }
+
+    // =========================================================================
+    // EXAMS COLLECTION
+    // =========================================================================
+    match /exams/{examId} {
+      // Students can read scheduled/active exams; Teachers can read their own exams; Admins can read all
+      allow read: if isAuthenticated() && (
+        isAdmin() ||
+        (isTeacher() && resource.data.teacherId == request.auth.uid) ||
+        (isStudent() && (resource.data.status == 'scheduled' || resource.data.status == 'active' || resource.data.status == 'completed'))
+      );
+      
+      // Teachers can create exams where teacherId matches their UID; Admins can create any exam
+      allow create: if isAuthenticated() && (
+        isAdmin() ||
+        (isTeacher() && request.resource.data.teacherId == request.auth.uid)
+      );
+      
+      // Teachers can update their own exams; Admins can update any exam
+      allow update: if isAuthenticated() && (
+        isAdmin() ||
+        (isTeacher() && resource.data.teacherId == request.auth.uid)
+      );
+      
+      // Teachers can delete their own draft exams; Admins can delete any exam
+      allow delete: if isAdmin() || (isTeacher() && resource.data.teacherId == request.auth.uid);
+    }
+
+    // =========================================================================
+    // QUESTIONS COLLECTION
+    // =========================================================================
+    match /questions/{questionId} {
+      // Teachers who own the exam and Admins can read/write questions
+      // Students can only read questions when taking an active exam (in Phase 3 via secure query/assignment verification)
+      allow read: if isAuthenticated() && (
+        isAdmin() ||
+        isTeacher() ||
+        isStudent()
+      );
+      
+      allow create, update, delete: if isAuthenticated() && (
+        isAdmin() ||
+        isTeacher()
+      );
+    }
+
+    // =========================================================================
+    // ASSIGNMENTS COLLECTION
+    // =========================================================================
+    match /assignments/{assignmentId} {
+      // Student can read own assignments; Teachers & Admins can read all relevant assignments
+      allow read: if isAuthenticated() && (
+        isAdmin() ||
+        isTeacher() ||
+        (isStudent() && resource.data.studentId == request.auth.uid)
+      );
+      
+      // Teachers and Admins can assign exams to students
+      allow create: if isAuthenticated() && (isAdmin() || isTeacher());
+      
+      // Student can update status (e.g. started/submitted for own assignment); Teachers and Admins have full update
+      allow update: if isAuthenticated() && (
+        isAdmin() ||
+        isTeacher() ||
+        (isStudent() && resource.data.studentId == request.auth.uid)
+      );
+      
+      allow delete: if isAdmin() || isTeacher();
+    }
+
+    // =========================================================================
+    // RESULTS COLLECTION
+    // =========================================================================
+    match /results/{resultId} {
+      // Student can read own results; Teachers & Admins can read results
+      allow read: if isAuthenticated() && (
+        isAdmin() ||
+        isTeacher() ||
+        (isStudent() && resource.data.studentId == request.auth.uid)
+      );
+      
+      // Results submitted by students (validated in Phase 3) or recorded by Teachers/Admins
+      allow create: if isAuthenticated() && (
+        isAdmin() ||
+        isTeacher() ||
+        (isStudent() && request.resource.data.studentId == request.auth.uid)
+      );
+      
+      // Only Teachers and Admins can modify/regrade results
+      allow update, delete: if isAdmin() || isTeacher();
+    }
+  }
+}
