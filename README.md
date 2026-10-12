@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # ROYAL COLLEGE OF NURSING SWAT
 ## Online Quiz, Examination, Mid-Term Examination and Result Management System
 
@@ -230,3 +231,6 @@ To establish the first system administrator securely:
 * **Phase 2 (Next):** Complete Frontend/UI (Responsive design, UI components, exam taking interface, student/teacher/admin dashboards).
 * **Phase 3:** Complete Backend & Business Logic (Exam engine, auto-marking, question bank management, grading algorithms, results publishing).
 * **Phase 4:** Testing, Security Audit, Bug Fixing & Production Deployment.
+=======
+# rcns-exam
+>>>>>>> a1677dd0ef72964a69c04707376cf51643ab0faf
