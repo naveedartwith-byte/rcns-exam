@@ -12,6 +12,7 @@ export interface Exam {
   type: ExamType;
   teacherId: string;
   teacherName?: string;
+  batch?: string;
   semester: string;
   program: string;
   duration: number; // in minutes

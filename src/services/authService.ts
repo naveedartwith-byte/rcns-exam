@@ -11,7 +11,7 @@ import {
   doc,
   getDoc,
   serverTimestamp,
-  runTransaction,
+  writeBatch,
 } from 'firebase/firestore';
 import { auth } from '../firebase/auth';
 import { db } from '../firebase/firestore';
@@ -69,15 +69,37 @@ export const authService = {
   },
 
   /**
-   * Registers a new student account, verifies KMU uniqueness via atomic transaction,
-   * creates the auth user, common user doc, student profile doc, and KMU registry claim.
+   * Registers a new student account:
+   * 1. Pre-checks KMU uniqueness in Firestore before creating Auth user
+   * 2. Creates the Firebase Auth user
+   * 3. Atomically creates users/{uid}, students/{uid}, and kmuRegistrations/{normalizedKmu}
+   * 4. Signs out immediately to prevent auto-login
    * NOTE: Passwords are NEVER saved in Firestore.
-   * Does NOT auto-login the user after registration.
    */
   async registerStudent(data: StudentRegistrationData): Promise<void> {
     const normalizedKmu = normalizeKmuRegistration(data.kmuRegistrationNo);
+    if (!normalizedKmu) {
+      throw new Error('Please enter a valid KMU Registration Number (e.g., 2026/KMU-RCNS/001).');
+    }
 
-    // 1. Create the Firebase Auth user
+    console.log('[Registration Step 1] Pre-checking KMU uniqueness for:', normalizedKmu);
+    // 1. Pre-check KMU uniqueness in Firestore before creating Auth user
+    try {
+      const kmuCheckRef = doc(db, 'kmuRegistrations', normalizedKmu);
+      const kmuCheckSnap = await getDoc(kmuCheckRef);
+      if (kmuCheckSnap.exists()) {
+        throw new Error(
+          `KMU Registration Number "${data.kmuRegistrationNo.trim()}" is already registered in the system.`
+        );
+      }
+    } catch (kmuErr: any) {
+      console.error('[Registration Step 1 Failed]', kmuErr);
+      if (kmuErr.message?.includes('already registered')) throw kmuErr;
+      throw new Error(`KMU verification error: ${kmuErr.message || kmuErr.code}`);
+    }
+
+    console.log('[Registration Step 2] Creating Firebase Auth user for:', data.email.trim());
+    // 2. Create the Firebase Auth user
     const userCredential = await createUserWithEmailAndPassword(
       auth,
       data.email.trim(),
@@ -85,61 +107,69 @@ export const authService = {
     );
     const user = userCredential.user;
     const uid = user.uid;
+    console.log('[Registration Step 2 Success] Created Auth user with UID:', uid);
 
     try {
-      // 2. Perform atomic uniqueness verification and document creation
-      await runTransaction(db, async (transaction) => {
-        const kmuRef = doc(db, 'kmuRegistrations', normalizedKmu);
-        const kmuDoc = await transaction.get(kmuRef);
+      console.log('[Registration Step 3] Writing Firestore batch for UID:', uid);
+      // 3. Atomically write kmuRegistrations, users, and students records
+      const batch = writeBatch(db);
+      const kmuRef = doc(db, 'kmuRegistrations', normalizedKmu);
+      const userRef = doc(db, 'users', uid);
+      const studentRef = doc(db, 'students', uid);
 
-        if (kmuDoc.exists()) {
-          throw new Error(`KMU Registration Number ${data.kmuRegistrationNo} is already registered.`);
-        }
-
-        const userRef = doc(db, 'users', uid);
-        const studentRef = doc(db, 'students', uid);
-
-        // Reserve KMU Registration with email mapping
-        transaction.set(kmuRef, {
-          uid,
-          email: data.email.trim(),
-          kmuRegistrationNo: data.kmuRegistrationNo.trim(),
-          normalizedRegistrationNo: normalizedKmu,
-          registeredAt: serverTimestamp(),
-        });
-
-        // Create common user record
-        transaction.set(userRef, {
-          uid,
-          role: 'student',
-          name: data.name.trim(),
-          email: data.email.trim(),
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
-
-        // Create student profile record
-        transaction.set(studentRef, {
-          uid,
-          role: 'student',
-          name: data.name.trim(),
-          fatherName: data.fatherName.trim(),
-          email: data.email.trim(),
-          kmuRegistrationNo: data.kmuRegistrationNo.trim(),
-          batch: data.batch.trim(),
-          semester: data.semester.trim(),
-          program: data.program.trim(),
-          department: data.department.trim(),
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
+      // Reserve KMU Registration with email mapping
+      batch.set(kmuRef, {
+        uid,
+        email: data.email.trim(),
+        kmuRegistrationNo: data.kmuRegistrationNo.trim(),
+        normalizedRegistrationNo: normalizedKmu,
+        registeredAt: serverTimestamp(),
       });
 
-      // Sign out immediately so user is not auto-logged in
+      // Create common user record
+      batch.set(userRef, {
+        uid,
+        role: 'student',
+        name: data.name.trim(),
+        email: data.email.trim(),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+
+      // Create student profile record
+      batch.set(studentRef, {
+        uid,
+        role: 'student',
+        name: data.name.trim(),
+        fatherName: data.fatherName.trim(),
+        email: data.email.trim(),
+        kmuRegistrationNo: data.kmuRegistrationNo.trim(),
+        batch: data.batch.trim(),
+        semester: data.semester.trim(),
+        program: data.program.trim(),
+        department: data.department.trim(),
+        status: 'active',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+
+      await batch.commit();
+      console.log('[Registration Step 3 Success] Firestore batch committed successfully.');
+
+      // 4. Sign out immediately so user is not auto-logged in
+      console.log('[Registration Step 4] Signing out new user...');
       await signOut(auth);
-    } catch (error) {
-      // If Firestore setup failed after Auth user creation, sign out and bubble error
-      await signOut(auth);
+      console.log('[Registration Complete] User signed out, ready for manual login.');
+    } catch (error: any) {
+      console.error('[Registration Step 3/4 Failed]', error);
+      // Clean up newly created Auth user if Firestore setup fails
+      try {
+        await user.delete();
+        console.log('[Registration Rollback] Deleted orphaned Auth user.');
+      } catch (delErr) {
+        console.warn('[Registration Rollback Warning] Could not delete user, signing out:', delErr);
+        await signOut(auth);
+      }
       throw error;
     }
   },

@@ -9,4 +9,8 @@ export interface Assignment {
   assignedBy: string; // Teacher or Admin UID
   assignedAt: Timestamp | string;
   status: AssignmentStatus;
+  batch?: string;
+  semester?: string;
+  program?: string;
+  examTitle?: string;
 }

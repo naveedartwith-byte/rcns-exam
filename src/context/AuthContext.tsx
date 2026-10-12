@@ -23,6 +23,98 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [role, setRole] = useState<UserRole | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
 
+  // Helper to fetch and apply user profile
+  const fetchAndApplyUserProfile = async (firebaseUser: FirebaseUser): Promise<UserRole | null> => {
+    try {
+      const uid = firebaseUser.uid;
+      const userDocRef = doc(db, 'users', uid);
+      const userDocSnap = await getDoc(userDocRef);
+
+      if (userDocSnap.exists()) {
+        const uProfile = userDocSnap.data() as UserProfile;
+        setUserProfile(uProfile);
+        setRole(uProfile.role);
+        setCurrentUser(firebaseUser);
+
+        if (uProfile.role === 'student') {
+          const studentSnap = await getDoc(doc(db, 'students', uid));
+          if (studentSnap.exists()) {
+            setStudentProfile(studentSnap.data() as StudentProfile);
+          }
+        } else if (uProfile.role === 'teacher') {
+          const teacherSnap = await getDoc(doc(db, 'teachers', uid));
+          if (teacherSnap.exists()) {
+            setTeacherProfile(teacherSnap.data() as TeacherProfile);
+          }
+        } else if (uProfile.role === 'admin') {
+          const adminSnap = await getDoc(doc(db, 'admins', uid));
+          if (adminSnap.exists()) {
+            setAdminProfile(adminSnap.data() as AdminProfile);
+          }
+        }
+        return uProfile.role;
+      } else {
+        // Fallback: Check if teacher profile exists directly in teachers/{uid}
+        const teacherSnap = await getDoc(doc(db, 'teachers', uid));
+        if (teacherSnap.exists()) {
+          const tData = teacherSnap.data() as TeacherProfile;
+          setTeacherProfile(tData);
+          setRole('teacher');
+          setUserProfile({
+            uid,
+            role: 'teacher',
+            name: tData.name,
+            email: tData.email,
+            createdAt: tData.createdAt,
+            updatedAt: tData.updatedAt,
+          });
+          setCurrentUser(firebaseUser);
+          return 'teacher';
+        }
+
+        // Fallback: Check if student profile exists in students/{uid}
+        const studentSnap = await getDoc(doc(db, 'students', uid));
+        if (studentSnap.exists()) {
+          const sData = studentSnap.data() as StudentProfile;
+          setStudentProfile(sData);
+          setRole('student');
+          setUserProfile({
+            uid,
+            role: 'student',
+            name: sData.name,
+            email: sData.email,
+            createdAt: sData.createdAt,
+            updatedAt: sData.updatedAt,
+          });
+          setCurrentUser(firebaseUser);
+          return 'student';
+        }
+
+        // Fallback: Check if admin profile exists in admins/{uid}
+        const adminSnap = await getDoc(doc(db, 'admins', uid));
+        if (adminSnap.exists()) {
+          const aData = adminSnap.data() as AdminProfile;
+          setAdminProfile(aData);
+          setRole('admin');
+          setUserProfile({
+            uid,
+            role: 'admin',
+            name: aData.name,
+            email: aData.email,
+            createdAt: aData.createdAt,
+            updatedAt: aData.updatedAt,
+          });
+          setCurrentUser(firebaseUser);
+          return 'admin';
+        }
+      }
+      return null;
+    } catch (error) {
+      console.error('Error fetching user profile in AuthContext:', error);
+      return null;
+    }
+  };
+
   // Fetch role-specific profile when auth state changes
   useEffect(() => {
     const unsubscribe = authService.onAuthStateChanged(async (firebaseUser) => {
@@ -38,74 +130,30 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return;
       }
 
-      try {
-        const uid = firebaseUser.uid;
-        // Fetch common user profile
-        const userDocRef = doc(db, 'users', uid);
-        const userDocSnap = await getDoc(userDocRef);
-
-        if (userDocSnap.exists()) {
-          const uProfile = userDocSnap.data() as UserProfile;
-          setUserProfile(uProfile);
-          setRole(uProfile.role);
-
-          // Fetch specific profile based on role
-          if (uProfile.role === 'student') {
-            const studentSnap = await getDoc(doc(db, 'students', uid));
-            if (studentSnap.exists()) {
-              setStudentProfile(studentSnap.data() as StudentProfile);
-            }
-          } else if (uProfile.role === 'teacher') {
-            const teacherSnap = await getDoc(doc(db, 'teachers', uid));
-            if (teacherSnap.exists()) {
-              setTeacherProfile(teacherSnap.data() as TeacherProfile);
-            }
-          } else if (uProfile.role === 'admin') {
-            const adminSnap = await getDoc(doc(db, 'admins', uid));
-            if (adminSnap.exists()) {
-              setAdminProfile(adminSnap.data() as AdminProfile);
-            }
-          }
-        } else {
-          // Check if user is an admin registered directly in admins collection
-          const adminSnap = await getDoc(doc(db, 'admins', uid));
-          if (adminSnap.exists()) {
-            const aProfile = adminSnap.data() as AdminProfile;
-            setAdminProfile(aProfile);
-            setRole('admin');
-            setUserProfile({
-              uid,
-              role: 'admin',
-              name: aProfile.name,
-              email: aProfile.email,
-              createdAt: aProfile.createdAt,
-              updatedAt: aProfile.updatedAt,
-            });
-          }
-        }
-      } catch (error) {
-        console.error('Error fetching user profile:', error);
-      } finally {
-        setLoading(false);
-      }
+      await fetchAndApplyUserProfile(firebaseUser);
+      setLoading(false);
     });
 
     return () => unsubscribe();
   }, []);
 
-  const login = async (email: string, password: string): Promise<void> => {
+  const login = async (email: string, password: string): Promise<UserRole> => {
     setLoading(true);
     try {
-      await authService.login(email, password);
+      const firebaseUser = await authService.login(email, password);
+      const userRole = await fetchAndApplyUserProfile(firebaseUser);
+      return userRole || 'teacher';
     } finally {
       setLoading(false);
     }
   };
 
-  const loginWithKmu = async (kmuRegistrationNo: string, password: string): Promise<void> => {
+  const loginWithKmu = async (kmuRegistrationNo: string, password: string): Promise<UserRole> => {
     setLoading(true);
     try {
-      await authService.loginWithKmu(kmuRegistrationNo, password);
+      const firebaseUser = await authService.loginWithKmu(kmuRegistrationNo, password);
+      const userRole = await fetchAndApplyUserProfile(firebaseUser);
+      return userRole || 'student';
     } finally {
       setLoading(false);
     }

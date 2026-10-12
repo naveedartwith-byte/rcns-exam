@@ -4,7 +4,7 @@ import { useAuth } from '../../hooks/useAuth';
 import { Logo, Input, Button, Alert, Checkbox } from '../../components/ui';
 
 export const LoginPage: React.FC = () => {
-  const { login, loginWithKmu, role } = useAuth();
+  const { login, loginWithKmu } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -41,9 +41,9 @@ export const LoginPage: React.FC = () => {
         await loginWithKmu(kmuRegNo.trim(), password);
         navigate(from || '/student', { replace: true });
       } else {
-        await login(email.trim(), password);
-        const targetRoute = from || (role === 'teacher' ? '/teacher' : '/admin/dashboard');
-        navigate(targetRoute, { replace: true });
+        const userRole = await login(email.trim(), password);
+        const defaultRoute = userRole === 'teacher' ? '/teacher' : '/admin/dashboard';
+        navigate(from || defaultRoute, { replace: true });
       }
     } catch (err: unknown) {
       const error = err as { code?: string; message?: string };

@@ -16,7 +16,8 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
   const { currentUser, role, loading } = useAuth();
   const location = useLocation();
 
-  if (loading) {
+  // If loading or if user is authenticated but role is still resolving, show loader instead of flashing unauthorized
+  if (loading || (currentUser && role === null)) {
     return (
       <div style={{ display: 'flex', height: '100vh', justifyContent: 'center', alignItems: 'center' }}>
         <LoadingSpinner size="lg" text="Verifying Royal College of Nursing Swat Authentication..." />

@@ -13,35 +13,51 @@ import {
 import { db } from '../firebase/firestore';
 import type { Assignment, AssignmentStatus } from '../types/assignment';
 import type { Exam } from '../types/exam';
+import { getEffectiveExamStatus, parseDateToMillis } from '../utils/dateTime';
 
 export const assignmentService = {
   /**
    * Retrieves assignments assigned to a specific student.
    */
   async getAssignmentsByStudentId(studentId: string): Promise<Assignment[]> {
-    const assignmentsCol = collection(db, 'assignments');
-    const q = query(assignmentsCol, where('studentId', '==', studentId));
-    const snapshot = await getDocs(q);
-    return snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Assignment));
+    if (!studentId) return [];
+    try {
+      const assignmentsCol = collection(db, 'assignments');
+      const q = query(assignmentsCol, where('studentId', '==', studentId));
+      const snapshot = await getDocs(q);
+      return snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Assignment));
+    } catch (err) {
+      console.error('Error fetching assignments by student ID:', err);
+      return [];
+    }
   },
 
   /**
    * Retrieves assignments for a specific exam.
    */
   async getAssignmentsByExamId(examId: string): Promise<Assignment[]> {
-    const assignmentsCol = collection(db, 'assignments');
-    const q = query(assignmentsCol, where('examId', '==', examId));
-    const snapshot = await getDocs(q);
-    return snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Assignment));
+    if (!examId) return [];
+    try {
+      const assignmentsCol = collection(db, 'assignments');
+      const q = query(assignmentsCol, where('examId', '==', examId));
+      const snapshot = await getDocs(q);
+      return snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Assignment));
+    } catch (err) {
+      console.error('Error fetching assignments by exam ID:', err);
+      return [];
+    }
   },
 
   /**
-   * Assigns an exam to a student with deterministic duplicate prevention.
+   * Assigns an exam to an individual student with deterministic duplicate prevention.
    */
   async assignExamToStudent(assignmentData: {
     examId: string;
     studentId: string;
     assignedBy: string;
+    batch?: string;
+    semester?: string;
+    program?: string;
     status?: AssignmentStatus;
   }): Promise<string> {
     const assignmentId = `${assignmentData.examId}_${assignmentData.studentId}`;
@@ -54,6 +70,9 @@ export const assignmentService = {
         examId: assignmentData.examId,
         studentId: assignmentData.studentId,
         assignedBy: assignmentData.assignedBy,
+        batch: assignmentData.batch || '',
+        semester: assignmentData.semester || '',
+        program: assignmentData.program || '',
         status: assignmentData.status || 'assigned',
         assignedAt: serverTimestamp(),
       },
@@ -64,42 +83,116 @@ export const assignmentService = {
   },
 
   /**
-   * Assigns an exam to all students matching a cohort (Program, Semester, optional Batch).
+   * Assigns an exam/quiz to all students matching a cohort (Batch, Semester, Program).
+   * Validates required batch and semester.
+   * Deterministically creates assignment documents and updates target exam metadata.
    */
   async assignExamToCohort(params: {
     examId: string;
-    program: string;
+    batch: string;
     semester: string;
-    batch?: string;
+    program?: string;
     assignedBy: string;
-  }): Promise<number> {
-    const studentsCol = collection(db, 'students');
-    let q = query(
-      studentsCol,
-      where('program', '==', params.program),
-      where('semester', '==', params.semester)
-    );
-
-    const snapshot = await getDocs(q);
-    const matchingStudents = snapshot.docs
-      .map((d) => d.data())
-      .filter((s) => (!params.batch || s.batch === params.batch));
-
-    if (matchingStudents.length === 0) {
-      return 0;
+  }): Promise<{ assignedCount: number; message: string }> {
+    if (!params.examId) {
+      throw new Error('Examination ID is required for assignment.');
+    }
+    if (!params.batch || !params.batch.trim()) {
+      throw new Error('Batch is required. Please select a batch first.');
+    }
+    if (!params.semester || !params.semester.trim()) {
+      throw new Error('Semester is required. Please select a semester.');
     }
 
-    const batch = writeBatch(db);
+    const cleanBatch = params.batch.trim();
+    const cleanSemester = params.semester.trim();
+    const cleanProgram = (params.program || '').trim();
+
+    // 1. Update the exam document itself with the target batch, semester, and program
+    try {
+      const examRef = doc(db, 'exams', params.examId);
+      const examUpdate: Record<string, any> = {
+        batch: cleanBatch,
+        semester: cleanSemester,
+        updatedAt: serverTimestamp(),
+      };
+      if (cleanProgram) {
+        examUpdate.program = cleanProgram;
+      }
+      await updateDoc(examRef, examUpdate);
+    } catch (examErr) {
+      console.warn('Could not update exam target cohort directly:', examErr);
+    }
+
+    // 2. Query matching students
+    const studentsCol = collection(db, 'students');
+    let snapshot;
+    try {
+      let q;
+      if (cleanProgram) {
+        q = query(
+          studentsCol,
+          where('program', '==', cleanProgram),
+          where('semester', '==', cleanSemester)
+        );
+      } else {
+        q = query(studentsCol, where('semester', '==', cleanSemester));
+      }
+      snapshot = await getDocs(q);
+    } catch (queryErr) {
+      // Fallback: load students collection to filter in-memory if composite query index is absent
+      console.warn('Cohort student query fallback triggered:', queryErr);
+      snapshot = await getDocs(studentsCol);
+    }
+
+    const matchingStudents: Array<Record<string, any> & { docId: string }> = snapshot.docs
+      .map((d) => ({ ...d.data(), docId: d.id }))
+      .filter((s: any) => {
+        // Compare batch
+        const studentBatch = (s.batch || '').trim().toLowerCase();
+        const targetBatch = cleanBatch.toLowerCase();
+        if (studentBatch !== targetBatch) return false;
+
+        // Compare semester
+        const studentSemester = (s.semester || '').trim().toLowerCase();
+        const targetSemester = cleanSemester.toLowerCase();
+        if (studentSemester !== targetSemester) return false;
+
+        // Compare program if provided
+        if (cleanProgram) {
+          const studentProgram = (s.program || '').trim().toLowerCase();
+          if (studentProgram !== cleanProgram.toLowerCase()) return false;
+        }
+
+        return true;
+      });
+
+    if (matchingStudents.length === 0) {
+      return {
+        assignedCount: 0,
+        message: `No registered candidates currently found in ${cleanBatch} (${cleanSemester}). The exam cohort criteria has been recorded for when students enroll.`,
+      };
+    }
+
+    // 3. Batch commit assignments
+    const batchWriter = writeBatch(db);
     for (const student of matchingStudents) {
-      const assignmentId = `${params.examId}_${student.uid}`;
+      const studentUid = (student.uid || student.docId) as string;
+      if (!studentUid) continue;
+
+      const assignmentId = `${params.examId}_${studentUid}`;
       const aRef = doc(db, 'assignments', assignmentId);
-      batch.set(
+
+      batchWriter.set(
         aRef,
         {
           id: assignmentId,
           examId: params.examId,
-          studentId: student.uid,
+          studentId: studentUid,
           assignedBy: params.assignedBy,
+          batch: cleanBatch,
+          semester: cleanSemester,
+          program: cleanProgram || student.program || '',
           status: 'assigned',
           assignedAt: serverTimestamp(),
         },
@@ -107,59 +200,165 @@ export const assignmentService = {
       );
     }
 
-    await batch.commit();
-    return matchingStudents.length;
+    await batchWriter.commit();
+
+    return {
+      assignedCount: matchingStudents.length,
+      message: `Successfully assigned to ${matchingStudents.length} candidate(s) in ${cleanBatch} - ${cleanSemester}!`,
+    };
   },
 
   /**
    * Retrieves all exams authorized for a student:
-   * Merges specific assignments and matching curriculum exams.
+   * 1. Loads individual assignment records (`assignments` collection) for this student.
+   * 2. Loads cohort-matching exams (`exams` collection matching batch, semester, program).
+   * 3. Dynamically computes the effective time-window status (upcoming, active, completed).
+   * 4. Excludes draft or archived exams from student view.
+   * 5. Strictly ensures students from other batches do NOT receive quizzes not meant for them.
    */
   async getAuthorizedExamsForStudent(
     studentId: string,
     program: string,
-    semester: string
+    semester: string,
+    batch?: string
   ): Promise<Array<Exam & { assignmentStatus?: AssignmentStatus; assignmentId?: string }>> {
-    const examsCol = collection(db, 'exams');
-    const qProgram = query(
-      examsCol,
-      where('program', '==', program),
-      where('semester', '==', semester)
-    );
-    const examSnap = await getDocs(qProgram);
-    const programExams = examSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Exam));
+    if (!studentId) return [];
 
-    const assignments = await this.getAssignmentsByStudentId(studentId);
-    const assignmentMap = new Map(assignments.map((a) => [a.examId, a]));
+    const resultExamMap = new Map<string, Exam & { assignmentStatus?: AssignmentStatus; assignmentId?: string }>();
 
-    const resultExams: Array<Exam & { assignmentStatus?: AssignmentStatus; assignmentId?: string }> = [];
-
-    // Add program matched exams
-    for (const exam of programExams) {
-      const assign = assignmentMap.get(exam.id);
-      resultExams.push({
-        ...exam,
-        assignmentId: assign?.id,
-        assignmentStatus: assign?.status || 'assigned',
-      });
+    // Step 1: Load individual assignments for this student
+    try {
+      const studentAssignments = await this.getAssignmentsByStudentId(studentId);
+      for (const assign of studentAssignments) {
+        if (!assign.examId) continue;
+        try {
+          const examDoc = await getDoc(doc(db, 'exams', assign.examId));
+          if (examDoc.exists()) {
+            const examData = { id: examDoc.id, ...examDoc.data() } as Exam;
+            // Exclude drafts and archived exams
+            if (examData.status !== 'draft' && examData.status !== 'archived') {
+              const effectiveStatus = getEffectiveExamStatus(examData);
+              resultExamMap.set(examData.id, {
+                ...examData,
+                status: effectiveStatus,
+                assignmentId: assign.id,
+                assignmentStatus: assign.status,
+              });
+            }
+          }
+        } catch (singleExamErr) {
+          console.warn(`Error loading exam ${assign.examId}:`, singleExamErr);
+        }
+      }
+    } catch (assignErr) {
+      console.error('Error loading student assignments:', assignErr);
     }
 
-    // Add individually assigned exams if not already included
-    for (const assign of assignments) {
-      if (!resultExams.some((e) => e.id === assign.examId)) {
-        const examDoc = await getDoc(doc(db, 'exams', assign.examId));
-        if (examDoc.exists()) {
-          resultExams.push({
-            id: examDoc.id,
-            ...(examDoc.data() as Omit<Exam, 'id'>),
-            assignmentId: assign.id,
-            assignmentStatus: assign.status,
-          });
+    // Step 2: Cohort Matching via Program & Semester
+    if (program && semester) {
+      try {
+        const examsCol = collection(db, 'exams');
+        const qCohort = query(
+          examsCol,
+          where('program', '==', program.trim()),
+          where('semester', '==', semester.trim()),
+          where('status', 'in', ['scheduled', 'active', 'completed'])
+        );
+
+        const examSnap = await getDocs(qCohort);
+        for (const docSnap of examSnap.docs) {
+          const exam = { id: docSnap.id, ...docSnap.data() } as Exam;
+
+          // Do not include drafts or archived
+          if (exam.status === 'draft' || exam.status === 'archived') {
+            continue;
+          }
+
+          // Strict batch check: If exam has a target batch, ensure it matches student's batch
+          if (exam.batch && batch) {
+            const examBatchNorm = exam.batch.trim().toLowerCase();
+            const studentBatchNorm = batch.trim().toLowerCase();
+            if (examBatchNorm !== studentBatchNorm) {
+              // Student is from another batch; skip
+              continue;
+            }
+          }
+
+          if (!resultExamMap.has(exam.id)) {
+            const effectiveStatus = getEffectiveExamStatus(exam);
+            resultExamMap.set(exam.id, {
+              ...exam,
+              status: effectiveStatus,
+              assignmentStatus: 'assigned',
+            });
+          }
         }
+      } catch (cohortErr) {
+        // In Firestore, if rules restrict listing all exams or if composite index is absent,
+        // we log gracefully. Individual assignments are already loaded and safe!
+        console.warn('Cohort exam query notice (individually assigned exams preserved):', cohortErr);
       }
     }
 
-    return resultExams;
+    // Step 3: Sort exams: Active first, then Upcoming (scheduled by startAt), then Completed
+    const sorted = Array.from(resultExamMap.values()).sort((a, b) => {
+      const order: Record<string, number> = { active: 1, scheduled: 2, completed: 3 };
+      const rankA = order[a.status] || 4;
+      const rankB = order[b.status] || 4;
+      if (rankA !== rankB) return rankA - rankB;
+
+      // Secondary sort: startAt ascending
+      const timeA = parseDateToMillis(a.startAt) || 0;
+      const timeB = parseDateToMillis(b.startAt) || 0;
+      return timeA - timeB;
+    });
+
+    return sorted;
+  },
+
+  /**
+   * Ensures an assignment document exists for an authorized candidate.
+   * If missing, deterministically creates or updates the assignment document
+   * (deterministic ID: `${examId}_${studentId}`) to prevent authorization failures.
+   */
+  async ensureStudentAssignment(params: {
+    examId: string;
+    studentId: string;
+    batch?: string;
+    semester?: string;
+    program?: string;
+    assignedBy?: string;
+  }): Promise<string> {
+    if (!params.examId || !params.studentId) return '';
+    const assignmentId = `${params.examId}_${params.studentId}`;
+    const assignmentRef = doc(db, 'assignments', assignmentId);
+
+    try {
+      const existing = await getDoc(assignmentRef);
+      if (existing.exists()) {
+        return assignmentId;
+      }
+
+      await setDoc(
+        assignmentRef,
+        {
+          id: assignmentId,
+          examId: params.examId,
+          studentId: params.studentId,
+          assignedBy: params.assignedBy || 'system-cohort-sync',
+          batch: params.batch || '',
+          semester: params.semester || '',
+          program: params.program || '',
+          status: 'assigned',
+          assignedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+    } catch (err) {
+      console.warn('Could not auto-create assignment record:', err);
+    }
+
+    return assignmentId;
   },
 
   /**
@@ -182,4 +381,3 @@ export const assignmentService = {
 };
 
 export default assignmentService;
-

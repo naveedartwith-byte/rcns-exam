@@ -28,3 +28,19 @@ export interface AdminDashboardStats {
   overallPassRate: number;
   recentActivity: ActivityItem[];
 }
+
+export interface StorageMetrics {
+  serviceName: string;
+  serviceType: 'firestore' | 'storage';
+  usedBytes: number;
+  totalQuotaBytes: number;
+  usagePercentage: number;
+  remainingBytes: number;
+  documentCount?: number;
+  lastUpdated: string;
+  source: 'live_telemetry' | 'estimated_footprint' | 'unavailable';
+  projectId: string;
+  status: 'healthy' | 'warning' | 'critical' | 'unavailable';
+  consoleUsageUrl: string;
+}
+

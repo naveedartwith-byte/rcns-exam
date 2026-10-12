@@ -9,6 +9,8 @@ import {
   Modal,
   ConfirmDialog,
   EmptyState,
+  Alert,
+  LoadingSpinner,
 } from '../../components/ui';
 import { useAuth } from '../../hooks/useAuth';
 import { assignmentService } from '../../services/assignmentService';
@@ -16,6 +18,8 @@ import { questionService } from '../../services/questionService';
 import { resultService } from '../../services/resultService';
 import type { Exam } from '../../types/exam';
 import type { Question } from '../../types/question';
+import { formatPakistanDateTime } from '../../utils/dateTime';
+import { checkStudentExamEligibility } from '../../utils/examEligibility';
 
 export const StudentExamsPage: React.FC = () => {
   const { currentUser, userProfile, studentProfile } = useAuth();
@@ -40,6 +44,8 @@ export const StudentExamsPage: React.FC = () => {
     percentage: number;
     passed: boolean;
   } | null>(null);
+  const [isLoadingQuestions, setIsLoadingQuestions] = useState(false);
+  const [examQuestionsError, setExamQuestionsError] = useState<string | null>(null);
 
   // Load authorized exams
   useEffect(() => {
@@ -50,7 +56,8 @@ export const StudentExamsPage: React.FC = () => {
           const authorized = await assignmentService.getAuthorizedExamsForStudent(
             currentUser.uid,
             studentProfile?.program || '',
-            studentProfile?.semester || ''
+            studentProfile?.semester || '',
+            studentProfile?.batch || ''
           );
           if (isMounted) setExams(authorized);
         }
@@ -104,6 +111,37 @@ export const StudentExamsPage: React.FC = () => {
   }, [takingExam, examSubmitted, timeLeftSeconds]);
 
   const handleStartExam = async (exam: Exam) => {
+    // 1. Perform canonical student exam eligibility check & diagnostics
+    const eligibility = checkStudentExamEligibility({
+      exam,
+      student: studentProfile,
+      user: userProfile,
+      nowMs: Date.now(),
+      isDev: true,
+    });
+
+    // 2. If access check fails, show clear, distinct message without combined ambiguity
+    if (!eligibility.allowed) {
+      alert(eligibility.message);
+      return;
+    }
+
+    // 3. Ensure assignment document exists in Firestore for this eligible candidate
+    if (currentUser) {
+      try {
+        await assignmentService.ensureStudentAssignment({
+          examId: exam.id,
+          studentId: currentUser.uid,
+          batch: studentProfile?.batch || exam.batch || '',
+          semester: studentProfile?.semester || exam.semester || '',
+          program: studentProfile?.program || exam.program || '',
+          assignedBy: 'cohort-verification',
+        });
+      } catch (assignErr) {
+        console.warn('Could not ensure candidate assignment doc:', assignErr);
+      }
+    }
+
     setTakingExam(exam);
     setCurrentQuestionIndex(0);
     setSelectedAnswers({});
@@ -111,12 +149,42 @@ export const StudentExamsPage: React.FC = () => {
     setTimeLeftSeconds(exam.duration * 60);
     setExamSubmitted(false);
     setExamScoreSummary(null);
+    setIsLoadingQuestions(true);
+    setExamQuestionsError(null);
 
     try {
       const questions = await questionService.getStudentQuestions(exam.id);
       setExamQuestions(questions);
-    } catch (err) {
+      if (questions.length === 0) {
+        setExamQuestionsError('No examination questions were found for this paper. Please contact your course instructor.');
+      }
+    } catch (err: any) {
       console.error('Error loading student sanitized questions:', err);
+      const isPermissionErr =
+        err?.code === 'permission-denied' ||
+        (err?.message && err.message.toLowerCase().includes('permission'));
+
+      let friendlyMsg = err?.message || 'Unable to load examination questions from database.';
+      if (isPermissionErr) {
+        // Re-evaluate eligibility for precise, non-combined explanation
+        const recheck = checkStudentExamEligibility({
+          exam,
+          student: studentProfile,
+          user: userProfile,
+          nowMs: Date.now(),
+          isDev: true,
+        });
+
+        if (!recheck.allowed) {
+          friendlyMsg = recheck.message;
+        } else {
+          friendlyMsg =
+            'Access restricted: Database permission denied loading examination questions. Please contact your examination proctor to verify registration.';
+        }
+      }
+      setExamQuestionsError(friendlyMsg);
+    } finally {
+      setIsLoadingQuestions(false);
     }
   };
 
@@ -362,6 +430,11 @@ export const StudentExamsPage: React.FC = () => {
 
                 {/* Footer Action */}
                 <div style={{ marginTop: '1.25rem', paddingTop: '1rem', borderTop: '1px solid var(--color-slate-100)' }}>
+                  <div style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)', marginBottom: '0.65rem' }}>
+                    <span>Schedule: </span>
+                    <strong style={{ color: 'var(--color-slate-700)' }}>{formatPakistanDateTime(exam.startAt)}</strong>
+                  </div>
+
                   {isAvailable && (
                     <Button
                       variant="primary"
@@ -369,13 +442,13 @@ export const StudentExamsPage: React.FC = () => {
                       onClick={() => handleStartExam(exam)}
                       style={{ backgroundColor: '#0f2744' }}
                     >
-                      Start Examination Now
+                      Start Examination Now →
                     </Button>
                   )}
 
                   {isScheduled && (
                     <Button variant="outline" fullWidth disabled>
-                      Opens on Oct 10, 2026
+                      Upcoming • Opens at {formatPakistanDateTime(exam.startAt)}
                     </Button>
                   )}
 
@@ -385,7 +458,7 @@ export const StudentExamsPage: React.FC = () => {
                       fullWidth
                       onClick={() => (window.location.href = '/student/results')}
                     >
-                      View Submitted Result
+                      Examination Closed • View Result
                     </Button>
                   )}
                 </div>
@@ -483,6 +556,25 @@ export const StudentExamsPage: React.FC = () => {
                 </Button>
               </div>
             </div>
+          ) : isLoadingQuestions ? (
+            <Card style={{ padding: '3rem', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem' }}>
+              <LoadingSpinner size="lg" />
+              <div style={{ fontSize: '1.05rem', fontWeight: 600, color: 'var(--color-slate-800)' }}>
+                Preparing examination paper &amp; question palette...
+              </div>
+              <p style={{ fontSize: '0.85rem', color: 'var(--color-slate-500)', maxWidth: '400px' }}>
+                Loading questions securely from the examination bank.
+              </p>
+            </Card>
+          ) : examQuestionsError ? (
+            <Card style={{ padding: '2rem', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+              <Alert type="warning">{examQuestionsError}</Alert>
+              <div style={{ display: 'flex', justifyContent: 'center' }}>
+                <Button variant="primary" onClick={() => setTakingExam(null)} style={{ backgroundColor: '#0f2744' }}>
+                  Return to Exams List
+                </Button>
+              </div>
+            </Card>
           ) : (
             /* Active Exam Layout: Timer, Question, Palette */
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
@@ -690,7 +782,12 @@ export const StudentExamsPage: React.FC = () => {
 
                     {/* Grid Palette */}
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.4rem' }}>
-                      {currentExamQuestions.map((_, qIdx) => {
+                      {currentExamQuestions.length === 0 ? (
+                        <div style={{ gridColumn: 'span 4', textAlign: 'center', padding: '1rem 0', fontSize: '0.8rem', color: 'var(--color-slate-500)' }}>
+                          No questions available
+                        </div>
+                      ) : (
+                        currentExamQuestions.map((_, qIdx) => {
                         const isAnswered = selectedAnswers[qIdx] !== undefined;
                         const isCurrent = currentQuestionIndex === qIdx;
                         const isFlagged = flaggedQuestions[qIdx];
@@ -732,7 +829,7 @@ export const StudentExamsPage: React.FC = () => {
                             {qIdx + 1}
                           </button>
                         );
-                      })}
+                      }))}
                     </div>
 
                     {/* Legend */}

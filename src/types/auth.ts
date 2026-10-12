@@ -27,8 +27,8 @@ export interface StudentRegistrationData {
 }
 
 export interface AuthContextType extends AuthState {
-  login: (email: string, password: string) => Promise<void>;
-  loginWithKmu: (kmuRegistrationNo: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<UserRole>;
+  loginWithKmu: (kmuRegistrationNo: string, password: string) => Promise<UserRole>;
   logout: () => Promise<void>;
   registerStudent: (data: StudentRegistrationData) => Promise<void>;
   resetPassword: (email: string) => Promise<void>;

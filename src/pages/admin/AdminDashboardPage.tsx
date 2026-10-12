@@ -18,6 +18,7 @@ import {
 } from '../../components/ui';
 import { adminService } from '../../services/adminService';
 import { examService } from '../../services/examService';
+import { StorageUsageCard } from '../../components/admin/StorageUsageCard';
 import type { AdminDashboardStats, ActivityItem } from '../../types/admin';
 import type { Exam } from '../../types/exam';
 
@@ -191,6 +192,9 @@ export const AdminDashboardPage: React.FC = () => {
           }
         />
       </div>
+
+      {/* Cloud Firestore Storage Usage & Capacity Indicator (ISSUE 4) */}
+      <StorageUsageCard />
 
       {/* Two Column Layout: Department Distribution + Recent Audit Log */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: '1.5rem' }}>

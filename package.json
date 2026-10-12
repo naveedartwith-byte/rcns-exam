@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types src/tests/phase4Verification.ts && node --experimental-strip-types src/tests/secureArchitectureVerification.ts",
+    "build:functions": "npm --prefix functions run build"
   },
   "dependencies": {
     "firebase": "^11.4.0",

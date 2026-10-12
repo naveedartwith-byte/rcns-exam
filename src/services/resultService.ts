@@ -1,18 +1,72 @@
 import {
   doc,
   getDoc,
-  setDoc,
   collection,
   query,
   where,
   getDocs,
-  serverTimestamp,
 } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
 import { db } from '../firebase/firestore';
+import { functions } from '../firebase/functions';
 import type { Result } from '../types/result';
-import { calculatePercentage } from '../utils/validation';
-import { questionService } from './questionService';
-import { examService } from './examService';
+
+/**
+ * Universal evaluator matching student answers with correct answers.
+ * Supports letter keys ('A', 'B', 'C', 'D'), numeric indices (0, 1, 2, 3), and text matching.
+ */
+export function checkAnswerMatch(
+  submitted: string | number | undefined,
+  correct: string | number | undefined,
+  options: any[]
+): boolean {
+  if (submitted === undefined || submitted === null || correct === undefined || correct === null) {
+    return false;
+  }
+
+  const subStr = String(submitted).trim().toUpperCase();
+  const corStr = String(correct).trim().toUpperCase();
+
+  // 1. Direct equality
+  if (subStr === corStr) return true;
+
+  // 2. Letter to Index conversion
+  const letterMap: Record<string, number> = { A: 0, B: 1, C: 2, D: 3 };
+  const subIndex =
+    letterMap[subStr] !== undefined
+      ? letterMap[subStr]
+      : !isNaN(Number(subStr)) && Number.isInteger(Number(subStr))
+      ? Number(subStr)
+      : -1;
+  const corIndex =
+    letterMap[corStr] !== undefined
+      ? letterMap[corStr]
+      : !isNaN(Number(corStr)) && Number.isInteger(Number(corStr))
+      ? Number(corStr)
+      : -1;
+
+  if (subIndex >= 0 && corIndex >= 0 && subIndex === corIndex) {
+    return true;
+  }
+
+  // 3. Option text match
+  if (Array.isArray(options)) {
+    if (subIndex >= 0 && subIndex < options.length) {
+      const optText = typeof options[subIndex] === 'string' ? options[subIndex] : options[subIndex]?.text;
+      if (optText && optText.trim().toLowerCase() === String(correct).trim().toLowerCase()) {
+        return true;
+      }
+    }
+    if (corIndex >= 0 && corIndex < options.length) {
+      const optText = typeof options[corIndex] === 'string' ? options[corIndex] : options[corIndex]?.text;
+      if (optText && optText.trim().toLowerCase() === String(submitted).trim().toLowerCase()) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
 
 export const resultService = {
   /**
@@ -45,8 +99,8 @@ export const resultService = {
   },
 
   /**
-   * Evaluates student exam answers, calculates marks and pass/fail,
-   * and creates an idempotent result document.
+   * Submits student exam answers to the secure serverless Cloud Function.
+   * Grading is evaluated authoritatively on the server; client cannot tamper with marks.
    */
   async submitExamAttempt(params: {
     examId: string;
@@ -61,100 +115,41 @@ export const resultService = {
     batch?: string;
     answers: Record<string, string | number>;
   }): Promise<Result> {
-    const resultId = `${params.studentId}_${params.examId}`;
-    const resultRef = doc(db, 'results', resultId);
-
-    // 1. Idempotency Check: Return existing result if already submitted
-    const existingSnap = await getDoc(resultRef);
-    if (existingSnap.exists()) {
-      return { id: existingSnap.id, ...existingSnap.data() } as Result;
-    }
-
-    // 2. Load authoritative questions with correct answers from Firestore
-    const questions = await questionService.getQuestionsByExamId(params.examId);
-    const exam = await examService.getExamById(params.examId);
-
-    let obtainedMarks = 0;
-    let totalMarks = 0;
-    let correctCount = 0;
-
-    for (const q of questions) {
-      const qMarks = Number(q.marks) || 1;
-      totalMarks += qMarks;
-
-      const submittedAnswer = params.answers[q.id];
-      if (submittedAnswer !== undefined && submittedAnswer !== null) {
-        // Compare answers safely
-        const isCorrect =
-          String(submittedAnswer).trim().toLowerCase() === String(q.correctAnswer).trim().toLowerCase();
-        if (isCorrect) {
-          obtainedMarks += qMarks;
-          correctCount++;
-        }
-      }
-    }
-
-    if (totalMarks === 0 && exam?.totalMarks) {
-      totalMarks = exam.totalMarks;
-    }
-
-    const percentage = calculatePercentage(obtainedMarks, totalMarks || 100);
-    const passingScore = 50; // Standard 50% passing threshold
-    const passed = percentage >= passingScore;
-
-    const grade =
-      percentage >= 85
-        ? 'A+'
-        : percentage >= 80
-        ? 'A'
-        : percentage >= 75
-        ? 'B+'
-        : percentage >= 70
-        ? 'B'
-        : percentage >= 60
-        ? 'C'
-        : percentage >= 50
-        ? 'D'
-        : 'F';
-
-    const resultData: Result = {
-      id: resultId,
-      examId: params.examId,
-      studentId: params.studentId,
-      studentName: params.studentName || 'Student',
-      kmuRegistrationNo: params.kmuRegistrationNo,
-      examTitle: params.examTitle || exam?.title || 'Academic Examination',
-      examType: params.examType || exam?.type || 'exam',
-      subject: params.subject || exam?.subject || 'Clinical Assessment',
-      grade,
-      program: params.program || exam?.program,
-      semester: params.semester || exam?.semester,
-      batch: params.batch,
-      marks: obtainedMarks,
-      totalMarks: totalMarks || 100,
-      percentage,
-      passed,
-      answersCount: Object.keys(params.answers).length,
-      correctCount,
-      submittedAt: serverTimestamp() as any,
-      status: 'published',
-    };
-
-    await setDoc(resultRef, resultData);
-
-    // Update assignment status to submitted
-    const assignmentId = `${params.examId}_${params.studentId}`;
     try {
-      const assignRef = doc(db, 'assignments', assignmentId);
-      await setDoc(assignRef, { status: 'submitted' }, { merge: true });
-    } catch {
-      // assignment update is best-effort
-    }
+      const submitFn = httpsCallable<
+        { examId: string; answers: Record<string, string | number> },
+        any
+      >(functions, 'submitExamAttempt');
 
-    return {
-      ...resultData,
-      submittedAt: new Date().toISOString(),
-    };
+      const response = await submitFn({
+        examId: params.examId,
+        answers: params.answers,
+      });
+
+      const data = response.data;
+      return {
+        id: data.resultId || `${params.studentId}_${params.examId}`,
+        examId: params.examId,
+        studentId: params.studentId,
+        studentName: data.studentName || params.studentName || 'Student Candidate',
+        kmuRegistrationNo: data.kmuRegistrationNo || params.kmuRegistrationNo,
+        examTitle: params.examTitle || 'Academic Examination',
+        examType: (params.examType as any) || 'exam',
+        subject: params.subject || 'Clinical Assessment',
+        program: params.program,
+        semester: params.semester,
+        batch: params.batch,
+        marks: data.marks,
+        totalMarks: data.totalMarks,
+        percentage: data.percentage,
+        passed: data.passed,
+        submittedAt: data.submittedAt || new Date().toISOString(),
+        status: data.status || 'graded',
+      };
+    } catch (err: any) {
+      console.error('Error submitting exam attempt via Cloud Function:', err);
+      throw err;
+    }
   },
 
   /**
@@ -169,4 +164,3 @@ export const resultService = {
 };
 
 export default resultService;
-

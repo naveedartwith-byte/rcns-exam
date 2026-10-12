@@ -38,6 +38,7 @@ service cloud.firestore {
       );
     }
 
+
     // =========================================================================
     // USERS COLLECTION (Common identity metadata)
     // =========================================================================
@@ -45,9 +46,8 @@ service cloud.firestore {
       // User can read their own identity record; Admins can read all users; Teachers can read user names/emails
       allow read: if isOwner(userId) || isTeacher() || isAdmin();
       
-      // User can create their initial user doc on registration (role cannot be self-elevated to teacher/admin)
-      allow create: if isOwner(userId) &&
-        (request.resource.data.role == 'student' || isAdmin());
+      // User can create their initial user doc on registration; Admin can create any user doc (such as teachers)
+      allow create: if (isOwner(userId) && request.resource.data.role == 'student') || isAdmin();
         
       // User can update their own non-role fields; Admins can update any user doc
       allow update: if (isOwner(userId) && request.resource.data.role == resource.data.role) || isAdmin();
@@ -77,13 +77,14 @@ service cloud.firestore {
     // KMU REGISTRATION UNIQUE REGISTRY
     // =========================================================================
     match /kmuRegistrations/{normalizedKmuReg} {
-      // Allow read for KMU login resolution before authentication
-      allow read: if true;
+      // Allow single document read for KMU login resolution and pre-registration check
+      allow get: if true;
+      // Prevent unauthenticated scraping of all students
+      allow list: if isAuthenticated() && (isTeacher() || isAdmin());
       
-      // Created on registration if it does not already exist
+      // Created on registration by the authenticated owning user
       allow create: if isAuthenticated() &&
-        request.resource.data.uid == request.auth.uid &&
-        !exists(/databases/$(database)/documents/kmuRegistrations/$(normalizedKmuReg));
+        request.resource.data.uid == request.auth.uid;
         
       // Only Admin or the owning student can update/delete their KMU registration claim
       allow update, delete: if isAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid);
@@ -115,8 +116,9 @@ service cloud.firestore {
     // ADMINS COLLECTION
     // =========================================================================
     match /admins/{adminId} {
-      // Only Admins can read, create, update, or delete Admin documents
-      allow read, write: if isAdmin();
+      // Users can check their own admin identity; Admins have full access
+      allow read: if isOwner(adminId) || isAdmin();
+      allow write: if isAdmin();
     }
 
     // =========================================================================
@@ -147,21 +149,13 @@ service cloud.firestore {
     }
 
     // =========================================================================
-    // QUESTIONS COLLECTION
+    // QUESTIONS COLLECTION (Protected Question Bank & Answer Keys)
     // =========================================================================
     match /questions/{questionId} {
-      // Teachers who own the exam and Admins can read/write questions
-      // Students can only read questions when taking an active exam (in Phase 3 via secure query/assignment verification)
-      allow read: if isAuthenticated() && (
-        isAdmin() ||
-        isTeacher() ||
-        isStudent()
-      );
-      
-      allow create, update, delete: if isAuthenticated() && (
-        isAdmin() ||
-        isTeacher()
-      );
+      // Master Question Bank & Answer Keys: ONLY Faculty and Admins can read or write directly.
+      // Students NEVER receive raw question documents via Firestore client SDK.
+      // Students receive sanitized questions exclusively via the getStudentExamQuestions Cloud Function.
+      allow read, write: if isAuthenticated() && (isAdmin() || isTeacher());
     }
 
     // =========================================================================
@@ -175,39 +169,42 @@ service cloud.firestore {
         (isStudent() && resource.data.studentId == request.auth.uid)
       );
       
-      // Teachers and Admins can assign exams to students
+      // Teachers and Admins can assign exams to students;
+      // Backend Cloud Functions manage automated candidate enrollment via Firebase Admin SDK
       allow create: if isAuthenticated() && (isAdmin() || isTeacher());
       
-      // Student can update status (e.g. started/submitted for own assignment); Teachers and Admins have full update
+      // Student can update status (e.g. started for own assignment) without modifying examId or studentId;
+      // Teachers and Admins have full update access
       allow update: if isAuthenticated() && (
         isAdmin() ||
         isTeacher() ||
-        (isStudent() && resource.data.studentId == request.auth.uid)
+        (
+          isStudent() &&
+          resource.data.studentId == request.auth.uid &&
+          request.resource.data.studentId == resource.data.studentId &&
+          request.resource.data.examId == resource.data.examId
+        )
       );
       
       allow delete: if isAdmin() || isTeacher();
     }
 
     // =========================================================================
-    // RESULTS COLLECTION
+    // RESULTS COLLECTION (Authoritative Examination Records)
     // =========================================================================
     match /results/{resultId} {
-      // Student can read own results; Teachers & Admins can read results
+      // Student can read own results; Teachers & Admins can read all results
       allow read: if isAuthenticated() && (
         isAdmin() ||
         isTeacher() ||
         (isStudent() && resource.data.studentId == request.auth.uid)
       );
       
-      // Results submitted by students (validated in Phase 3) or recorded by Teachers/Admins
-      allow create: if isAuthenticated() && (
-        isAdmin() ||
-        isTeacher() ||
-        (isStudent() && request.resource.data.studentId == request.auth.uid)
-      );
-      
-      // Only Teachers and Admins can modify/regrade results
-      allow update, delete: if isAdmin() || isTeacher();
+      // CRITICAL: Students CANNOT directly create, modify, or forge examination results.
+      // All result calculation, grading, and document creation must be performed
+      // server-side by Firebase Cloud Functions using the Firebase Admin SDK.
+      // Only Faculty and Admins can record or regrade results directly.
+      allow create, update, delete: if isAuthenticated() && (isAdmin() || isTeacher());
     }
   }
 }

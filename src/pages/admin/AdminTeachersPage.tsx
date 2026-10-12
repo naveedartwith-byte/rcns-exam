@@ -61,6 +61,7 @@ export const AdminTeachersPage: React.FC = () => {
   const [formData, setFormData] = useState({
     name: '',
     email: '',
+    password: 'Teacher@RCNS2026!',
     department: 'Nursing & Allied Health Sciences',
     designation: 'Assistant Professor',
     phone: '',
@@ -84,6 +85,7 @@ export const AdminTeachersPage: React.FC = () => {
     setFormData({
       name: '',
       email: '',
+      password: 'Teacher@RCNS2026!',
       department: 'Nursing & Allied Health Sciences',
       designation: 'Assistant Professor',
       phone: '',
@@ -97,6 +99,7 @@ export const AdminTeachersPage: React.FC = () => {
     setFormData({
       name: t.name,
       email: t.email,
+      password: '',
       department: t.department,
       designation: t.designation || 'Assistant Professor',
       phone: t.phone || '',
@@ -127,19 +130,21 @@ export const AdminTeachersPage: React.FC = () => {
         await adminService.provisionTeacher({
           name: formData.name,
           email: formData.email,
+          password: formData.password,
           department: formData.department,
           designation: formData.designation,
           phone: formData.phone,
           courses: courseList,
         });
-        setNotification(`Faculty member ${formData.name} profile provisioned.`);
+        setNotification(`Faculty member ${formData.name} provisioned with authentication credentials.`);
         fetchTeachers();
-      } catch (err) {
+      } catch (err: any) {
         console.error('Error provisioning teacher:', err);
+        setNotification(`Provisioning failed: ${err.message || 'Unknown error'}`);
       }
       setIsAddModalOpen(false);
     }
-    setTimeout(() => setNotification(null), 3500);
+    setTimeout(() => setNotification(null), 4500);
   };
 
   const handleToggleStatus = () => {
@@ -398,7 +403,20 @@ export const AdminTeachersPage: React.FC = () => {
               value={formData.email}
               onChange={(e) => setFormData({ ...formData, email: e.target.value })}
               required
+              disabled={Boolean(editingTeacher)}
             />
+
+            {!editingTeacher && (
+              <Input
+                label="Initial Faculty Password"
+                type="password"
+                placeholder="Temporary login password (min 6 chars)"
+                value={formData.password}
+                onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                helperText="Teacher will use this password to sign in via the Faculty Portal."
+                required
+              />
+            )}
 
             <Select
               label="Department"

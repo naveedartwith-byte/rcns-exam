@@ -1,9 +1,31 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
-import { StatCard, Button, Badge, Card, CardHeader, CardTitle, Table, TableHeader, TableBody, TableRow, TableHead, TableCell, TableContainer, Modal } from '../../components/ui';
+import {
+  StatCard,
+  Button,
+  Badge,
+  Card,
+  CardHeader,
+  CardTitle,
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+  TableContainer,
+  Modal,
+  LoadingSpinner,
+  Alert,
+} from '../../components/ui';
 import { assignmentService } from '../../services/assignmentService';
 import { resultService } from '../../services/resultService';
+import {
+  formatPakistanDateTime,
+  formatPakistanTime,
+  getEffectiveExamStatus,
+} from '../../utils/dateTime';
 import type { Exam } from '../../types/exam';
 import type { Result } from '../../types/result';
 
@@ -14,54 +36,79 @@ export const StudentDashboardPage: React.FC = () => {
   const studentName = userProfile?.name || 'Student Candidate';
   const kmuReg = studentProfile?.kmuRegistrationNo || 'KMU Registration';
   const program = studentProfile?.program || 'BS Nursing (Generic)';
+  const batch = studentProfile?.batch || 'Batch 15th';
   const semester = studentProfile?.semester || 'Semester 4';
 
   const [exams, setExams] = useState<Exam[]>([]);
   const [results, setResults] = useState<Result[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [selectedResult, setSelectedResult] = useState<Result | null>(null);
+  const [, setClockTick] = useState<number>(Date.now());
+
+  // Function to load dashboard data
+  const loadDashboardData = async () => {
+    if (!currentUser) return;
+    try {
+      setErrorMessage(null);
+      const [fetchedExams, fetchedResults] = await Promise.all([
+        assignmentService.getAuthorizedExamsForStudent(
+          currentUser.uid,
+          studentProfile?.program || program,
+          studentProfile?.semester || semester,
+          studentProfile?.batch || batch
+        ),
+        resultService.getResultsByStudentId(currentUser.uid),
+      ]);
+
+      setExams(fetchedExams);
+      setResults(fetchedResults);
+    } catch (err: any) {
+      console.error('Error fetching student dashboard data:', err);
+      setErrorMessage('Could not load examination schedule. Please verify your connection.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    let isMounted = true;
-    const loadDashboardData = async () => {
-      try {
-        if (currentUser) {
-          const [fetchedExams, fetchedResults] = await Promise.all([
-            assignmentService.getAuthorizedExamsForStudent(
-              currentUser.uid,
-              studentProfile?.program || '',
-              studentProfile?.semester || ''
-            ),
-            resultService.getResultsByStudentId(currentUser.uid),
-          ]);
-          if (isMounted) {
-            setExams(fetchedExams);
-            setResults(fetchedResults);
-          }
-        }
-      } catch (err) {
-        console.error('Error fetching student dashboard data:', err);
-      }
-    };
-
     loadDashboardData();
-    return () => {
-      isMounted = false;
-    };
   }, [currentUser, studentProfile]);
 
-  const activeExams = exams.filter((e) => e.status === 'active');
-  const upcomingExams = exams.filter((e) => e.status === 'scheduled');
+  // Periodic clock tick (every 15 seconds) to automatically transition Upcoming -> Active
+  // when scheduled start time arrives without requiring teacher intervention or manual refresh
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setClockTick(Date.now());
+      // Re-evaluate exam statuses in state
+      setExams((prev) =>
+        prev.map((exam) => ({
+          ...exam,
+          status: getEffectiveExamStatus(exam),
+        }))
+      );
+    }, 15000);
+
+    return () => clearInterval(timer);
+  }, []);
+
+  // Filter quizzes and exams by dynamic effective status
+  const activeExams = exams.filter((e) => getEffectiveExamStatus(e) === 'active');
+  const upcomingExams = exams.filter((e) => getEffectiveExamStatus(e) === 'scheduled');
   const completedResults = results.slice(0, 5);
   const totalAssigned = exams.length;
-  const completedCount = results.length;
   const avgPercentage =
     results.length > 0
       ? Math.round(results.reduce((acc, r) => acc + (r.percentage || 0), 0) / results.length)
       : 85;
 
+  if (loading) {
+    return <LoadingSpinner text="Loading candidate examination portal..." fullScreen />;
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.75rem' }}>
-      {/* Welcome Banner */}
+      {/* Welcome Banner with Full Academic Enrollment Info */}
       <div
         style={{
           background: 'linear-gradient(135deg, #0f2744 0%, #0e498b 60%, #0d9488 100%)',
@@ -83,16 +130,19 @@ export const StudentDashboardPage: React.FC = () => {
             style={{
               display: 'inline-flex',
               alignItems: 'center',
+              flexWrap: 'wrap',
               gap: '0.4rem',
-              padding: '0.2rem 0.65rem',
+              padding: '0.25rem 0.75rem',
               borderRadius: 'var(--radius-full)',
               backgroundColor: 'rgba(255, 255, 255, 0.15)',
-              fontSize: '0.78rem',
+              fontSize: '0.8rem',
               fontWeight: 600,
               marginBottom: '0.75rem',
             }}
           >
             <span>KMU ID: {kmuReg}</span>
+            <span>•</span>
+            <span style={{ color: '#fef08a' }}>{batch}</span>
             <span>•</span>
             <span>{semester}</span>
           </div>
@@ -102,12 +152,16 @@ export const StudentDashboardPage: React.FC = () => {
           </h1>
 
           <p style={{ fontSize: '0.95rem', color: '#e2e8f0', marginTop: '0.4rem', lineHeight: 1.5 }}>
-            Enrolled in <strong>{program}</strong> at ROYAL COLLEGE OF NURSING SWAT. You have{' '}
-            <strong style={{ color: '#fde68a' }}>{activeExams.length} active exam</strong> available for submission.
+            Enrolled in <strong>{program}</strong> at ROYAL COLLEGE OF NURSING SWAT.
+            {activeExams.length > 0 ? (
+              <span> You have <strong style={{ color: '#fde68a' }}>{activeExams.length} active quiz/exam</strong> ready to attempt.</span>
+            ) : (
+              <span> You have <strong style={{ color: '#fde68a' }}>{upcomingExams.length} upcoming scheduled quiz(zes)</strong>.</span>
+            )}
           </p>
         </div>
 
-        <div style={{ zIndex: 1, display: 'flex', gap: '0.75rem' }}>
+        <div style={{ zIndex: 1, display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
           <Button
             variant="secondary"
             onClick={() => navigate('/student/exams')}
@@ -125,12 +179,18 @@ export const StudentDashboardPage: React.FC = () => {
         </div>
       </div>
 
+      {errorMessage && (
+        <Alert type="danger" onDismiss={() => setErrorMessage(null)}>
+          {errorMessage}
+        </Alert>
+      )}
+
       {/* Statistics Metric Cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1.25rem' }}>
         <StatCard
-          title="Total Assigned Exams"
+          title="Assigned Quizzes & Exams"
           value={totalAssigned}
-          subtitle="All academic evaluations"
+          subtitle={`Enrolled in ${batch} • ${semester}`}
           variant="primary"
           icon={
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -144,9 +204,9 @@ export const StudentDashboardPage: React.FC = () => {
         />
 
         <StatCard
-          title="Active Exams"
+          title="Active Now"
           value={activeExams.length}
-          subtitle="Available for submission now"
+          subtitle="Open for immediate submission"
           variant="teal"
           icon={
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -157,14 +217,16 @@ export const StudentDashboardPage: React.FC = () => {
         />
 
         <StatCard
-          title="Completed Exams"
-          value={completedCount}
-          subtitle="Submitted & graded"
+          title="Upcoming Quizzes"
+          value={upcomingExams.length}
+          subtitle="Scheduled by Faculty"
           variant="slate"
           icon={
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
-              <polyline points="22 4 12 14.01 9 11.01" />
+              <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+              <line x1="16" y1="2" x2="16" y2="6" />
+              <line x1="8" y1="2" x2="8" y2="6" />
+              <line x1="3" y1="10" x2="21" y2="10" />
             </svg>
           }
         />
@@ -174,7 +236,7 @@ export const StudentDashboardPage: React.FC = () => {
           value={`${avgPercentage}%`}
           subtitle="Average Exam Score"
           variant="gold"
-          trend={{ value: 'Passing KMU Benchmark', isPositive: true }}
+          trend={{ value: 'KMU Standard Passing', isPositive: true }}
           icon={
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
@@ -183,65 +245,113 @@ export const StudentDashboardPage: React.FC = () => {
         />
       </div>
 
-      {/* Active Exam Action Alert if available */}
+      {/* SECTION 1: Active Quizzes & Examinations */}
       {activeExams.length > 0 && (
-        <Card style={{ borderLeft: '4px solid var(--color-primary-600)', backgroundColor: '#f0f7ff' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-              <div
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.75rem' }}>
+            <span
+              style={{
+                width: '10px',
+                height: '10px',
+                borderRadius: '50%',
+                backgroundColor: '#10b981',
+                boxShadow: '0 0 0 3px rgba(16, 185, 129, 0.25)',
+              }}
+            />
+            <h2 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--color-slate-900)', margin: 0 }}>
+              Active Quizzes &amp; Live Examinations ({activeExams.length})
+            </h2>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            {activeExams.map((exam) => (
+              <Card
+                key={exam.id}
                 style={{
-                  width: '44px',
-                  height: '44px',
-                  borderRadius: '50%',
-                  backgroundColor: 'var(--color-primary-100)',
-                  color: 'var(--color-primary-800)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  flexShrink: 0,
+                  borderLeft: '5px solid #10b981',
+                  backgroundColor: '#f0fdf4',
+                  boxShadow: 'var(--shadow-sm)',
                 }}
               >
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <polygon points="5 3 19 12 5 21 5 3" />
-                </svg>
-              </div>
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <Badge variant="primary">Active Now</Badge>
-                  <span style={{ fontSize: '0.8rem', color: 'var(--color-slate-500)' }}>
-                    Duration: {activeExams[0].duration} Mins • Total Marks: {activeExams[0].totalMarks}
-                  </span>
-                </div>
-                <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--color-slate-900)', marginTop: '0.2rem' }}>
-                  {activeExams[0].title}
-                </h3>
-                <span style={{ fontSize: '0.85rem', color: 'var(--color-slate-600)' }}>
-                  Subject: {activeExams[0].subject} • Instructor: {activeExams[0].teacherName}
-                </span>
-              </div>
-            </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1.25rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem' }}>
+                    <div
+                      style={{
+                        width: '48px',
+                        height: '48px',
+                        borderRadius: '50%',
+                        backgroundColor: '#dcfce7',
+                        color: '#15803d',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        flexShrink: 0,
+                        border: '2px solid #86efac',
+                      }}
+                    >
+                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                        <polygon points="5 3 19 12 5 21 5 3" />
+                      </svg>
+                    </div>
 
-            <Button
-              variant="primary"
-              size="md"
-              onClick={() => navigate('/student/exams')}
-              style={{ backgroundColor: '#0f2744' }}
-            >
-              Enter Exam Room
-            </Button>
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        <Badge variant="success">Active Now</Badge>
+                        <Badge variant="outline">{exam.type.toUpperCase()}</Badge>
+                        <span style={{ fontSize: '0.8rem', color: '#166534', fontWeight: 600 }}>
+                          Closes: {formatPakistanDateTime(exam.endAt)}
+                        </span>
+                      </div>
+
+                      <h3 style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--color-slate-900)', marginTop: '0.25rem' }}>
+                        {exam.title}
+                      </h3>
+
+                      <div style={{ fontSize: '0.85rem', color: 'var(--color-slate-600)', marginTop: '0.2rem' }}>
+                        <span>Subject: <strong>{exam.subject || 'Clinical Assessment'}</strong></span>
+                        <span style={{ margin: '0 0.5rem' }}>•</span>
+                        <span>Duration: <strong>{exam.duration} Mins</strong></span>
+                        <span style={{ margin: '0 0.5rem' }}>•</span>
+                        <span>Total Marks: <strong>{exam.totalMarks}</strong></span>
+                        {exam.teacherName && (
+                          <>
+                            <span style={{ margin: '0 0.5rem' }}>•</span>
+                            <span>Examiner: <strong>{exam.teacherName}</strong></span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <Button
+                    variant="primary"
+                    size="lg"
+                    onClick={() => navigate('/student/exams')}
+                    style={{
+                      backgroundColor: '#0f2744',
+                      borderColor: '#0f2744',
+                      fontWeight: 700,
+                      padding: '0.75rem 1.75rem',
+                    }}
+                  >
+                    Enter Exam Room →
+                  </Button>
+                </div>
+              </Card>
+            ))}
           </div>
-        </Card>
+        </div>
       )}
 
-      {/* Two Column Layout: Upcoming Exams & Recent Results */}
+      {/* Two Column Layout: Upcoming Quizzes & Recent Results */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: '1.5rem' }}>
-        {/* Upcoming Exams Card */}
+        {/* SECTION 2: Upcoming Quizzes & Scheduled Papers */}
         <Card>
           <CardHeader>
             <div>
-              <CardTitle>Upcoming Examination Schedule</CardTitle>
+              <CardTitle>Upcoming Quizzes &amp; Scheduled Schedule</CardTitle>
               <span style={{ fontSize: '0.8rem', color: 'var(--color-slate-500)' }}>
-                Scheduled mid-terms &amp; quizzes
+                Targeted for {batch} • {semester}
               </span>
             </div>
             <Button variant="outline" size="sm" onClick={() => navigate('/student/exams')}>
@@ -249,57 +359,83 @@ export const StudentDashboardPage: React.FC = () => {
             </Button>
           </CardHeader>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
-            {upcomingExams.map((exam) => (
-              <div
-                key={exam.id}
-                style={{
-                  padding: '1rem',
-                  borderRadius: 'var(--radius-md)',
-                  border: '1px solid var(--color-slate-200)',
-                  backgroundColor: 'var(--color-slate-50)',
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                }}
-              >
-                <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <Badge variant={exam.type === 'midterm' ? 'warning' : 'info'}>
-                      {exam.type.toUpperCase()}
-                    </Badge>
-                    <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)' }}>
-                      {exam.duration} Minutes
-                    </span>
-                  </div>
-                  <div style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--color-slate-900)', marginTop: '0.25rem' }}>
-                    {exam.title}
-                  </div>
-                  <div style={{ fontSize: '0.8rem', color: 'var(--color-slate-600)', marginTop: '0.15rem' }}>
-                    {exam.subject}
-                  </div>
-                </div>
-
-                <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--color-slate-700)' }}>
-                    Oct 10, 2026
-                  </div>
-                  <Badge variant="outline" size="sm" style={{ marginTop: '0.25rem' }}>
-                    Scheduled
-                  </Badge>
-                </div>
+          {upcomingExams.length === 0 ? (
+            <div
+              style={{
+                padding: '2.5rem 1.5rem',
+                textAlign: 'center',
+                color: 'var(--color-slate-500)',
+                backgroundColor: 'var(--color-slate-50)',
+                borderRadius: 'var(--radius-md)',
+                border: '1px dashed var(--color-slate-200)',
+              }}
+            >
+              <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>📅</div>
+              <div style={{ fontWeight: 700, color: 'var(--color-slate-800)', fontSize: '0.95rem' }}>
+                No Upcoming Quizzes Scheduled
               </div>
-            ))}
-          </div>
+              <p style={{ fontSize: '0.85rem', marginTop: '0.25rem', maxWidth: '320px', margin: '0.25rem auto 0' }}>
+                All scheduled quizzes for your cohort have been completed or none are currently scheduled by faculty.
+              </p>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
+              {upcomingExams.map((exam) => (
+                <div
+                  key={exam.id}
+                  style={{
+                    padding: '1.1rem',
+                    borderRadius: 'var(--radius-md)',
+                    border: '1px solid var(--color-slate-200)',
+                    backgroundColor: 'var(--color-slate-50)',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    gap: '1rem',
+                  }}
+                >
+                  <div style={{ flex: 1 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                      <Badge variant="warning">UPCOMING</Badge>
+                      <Badge variant="outline">{exam.type.toUpperCase()}</Badge>
+                      <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)' }}>
+                        {exam.duration} Minutes • {exam.totalMarks} Marks
+                      </span>
+                    </div>
+
+                    <div style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--color-slate-900)', marginTop: '0.35rem' }}>
+                      {exam.title}
+                    </div>
+
+                    <div style={{ fontSize: '0.8rem', color: 'var(--color-slate-600)', marginTop: '0.15rem' }}>
+                      {exam.subject || 'Course Assessment'} {exam.teacherName ? `• ${exam.teacherName}` : ''}
+                    </div>
+                  </div>
+
+                  <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                    <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#0f2744' }}>
+                      {formatPakistanDateTime(exam.startAt)}
+                    </div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--color-slate-500)', marginTop: '0.15rem' }}>
+                      Opens at {formatPakistanTime(exam.startAt)}
+                    </div>
+                    <Badge variant="outline" size="sm" style={{ marginTop: '0.35rem' }}>
+                      Locked Until Start Time
+                    </Badge>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </Card>
 
-        {/* Recent Results Card */}
+        {/* SECTION 3: Recent Results & Completed Quizzes */}
         <Card>
           <CardHeader>
             <div>
               <CardTitle>Recent Examination Results</CardTitle>
               <span style={{ fontSize: '0.8rem', color: 'var(--color-slate-500)' }}>
-                Published official transcripts
+                Published official transcripts &amp; GPA records
               </span>
             </div>
             <Button variant="outline" size="sm" onClick={() => navigate('/student/results')}>
@@ -307,41 +443,62 @@ export const StudentDashboardPage: React.FC = () => {
             </Button>
           </CardHeader>
 
-          <TableContainer>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Exam / Subject</TableHead>
-                  <TableHead>Score</TableHead>
-                  <TableHead>Grade</TableHead>
-                  <TableHead style={{ textAlign: 'right' }}>Action</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {completedResults.map((res) => (
-                  <TableRow key={res.id}>
-                    <TableCell>
-                      <div style={{ fontWeight: 600, color: 'var(--color-slate-900)' }}>{res.subject}</div>
-                      <div style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)' }}>{res.examTitle}</div>
-                    </TableCell>
-                    <TableCell>
-                      <strong>{res.marks}</strong> / {res.totalMarks} ({res.percentage}%)
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={(res.grade || 'A').startsWith('A') ? 'success' : 'primary'}>
-                        {res.grade || 'Passed'}
-                      </Badge>
-                    </TableCell>
-                    <TableCell style={{ textAlign: 'right' }}>
-                      <Button variant="ghost" size="sm" onClick={() => setSelectedResult(res)}>
-                        View Card
-                      </Button>
-                    </TableCell>
+          {completedResults.length === 0 ? (
+            <div
+              style={{
+                padding: '2.5rem 1.5rem',
+                textAlign: 'center',
+                color: 'var(--color-slate-500)',
+                backgroundColor: 'var(--color-slate-50)',
+                borderRadius: 'var(--radius-md)',
+                border: '1px dashed var(--color-slate-200)',
+              }}
+            >
+              <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>📝</div>
+              <div style={{ fontWeight: 700, color: 'var(--color-slate-800)', fontSize: '0.95rem' }}>
+                No Results Recorded Yet
+              </div>
+              <p style={{ fontSize: '0.85rem', marginTop: '0.25rem', maxWidth: '320px', margin: '0.25rem auto 0' }}>
+                Completed quizzes and examinations will display their official grades here after submission.
+              </p>
+            </div>
+          ) : (
+            <TableContainer>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Exam / Subject</TableHead>
+                    <TableHead>Score</TableHead>
+                    <TableHead>Grade</TableHead>
+                    <TableHead style={{ textAlign: 'right' }}>Action</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </TableContainer>
+                </TableHeader>
+                <TableBody>
+                  {completedResults.map((res) => (
+                    <TableRow key={res.id}>
+                      <TableCell>
+                        <div style={{ fontWeight: 600, color: 'var(--color-slate-900)' }}>{res.subject}</div>
+                        <div style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)' }}>{res.examTitle}</div>
+                      </TableCell>
+                      <TableCell>
+                        <strong>{res.marks}</strong> / {res.totalMarks} ({res.percentage}%)
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={(res.grade || 'A').startsWith('A') ? 'success' : 'primary'}>
+                          {res.grade || 'Passed'}
+                        </Badge>
+                      </TableCell>
+                      <TableCell style={{ textAlign: 'right' }}>
+                        <Button variant="ghost" size="sm" onClick={() => setSelectedResult(res)}>
+                          View Card
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
         </Card>
       </div>
 
@@ -351,7 +508,7 @@ export const StudentDashboardPage: React.FC = () => {
           isOpen={Boolean(selectedResult)}
           onClose={() => setSelectedResult(null)}
           title="Official Examination Result Card"
-          description={`ROYAL COLLEGE OF NURSING SWAT • Session 2025-2026`}
+          description="ROYAL COLLEGE OF NURSING SWAT • KMU Affiliated Evaluation Transcript"
           maxWidth="md"
           footer={
             <Button variant="primary" onClick={() => setSelectedResult(null)} style={{ backgroundColor: '#0f2744' }}>
@@ -372,7 +529,7 @@ export const StudentDashboardPage: React.FC = () => {
               }}
             >
               <div>
-                <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)', textTransform: 'uppercase' }}>Student Name</span>
+                <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)', textTransform: 'uppercase' }}>Candidate Name</span>
                 <div style={{ fontWeight: 700, color: 'var(--color-slate-900)' }}>{selectedResult.studentName}</div>
               </div>
               <div>
