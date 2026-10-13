@@ -49,27 +49,39 @@ service cloud.firestore {
       // User can create their initial user doc on registration; Admin can create any user doc (such as teachers)
       allow create: if (isOwner(userId) && request.resource.data.role == 'student') || isAdmin();
         
-      // User can update their own non-role fields; Admins can update any user doc
-      allow update: if (isOwner(userId) && request.resource.data.role == resource.data.role) || isAdmin();
+      // Students CANNOT self-edit their user document; Non-students can update non-role fields; Admins can update any user doc
+      allow update: if (isOwner(userId) && request.resource.data.role == resource.data.role && resource.data.role != 'student') || isAdmin();
       
       // Only Admins can delete users
       allow delete: if isAdmin();
     }
 
     // =========================================================================
-    // STUDENTS COLLECTION
+    // STUDENTS COLLECTION (Official Academic Dossiers)
     // =========================================================================
     match /students/{studentId} {
       // Student can read own profile; Teachers & Admins can read student profiles
       allow read: if isOwner(studentId) || isTeacher() || isAdmin();
       
-      // Student can create their own student profile during registration
+      // Student can create their own student profile during registration; Admin can create
       allow create: if (isOwner(studentId) && request.resource.data.role == 'student') || isAdmin();
       
-      // Student can update own profile (cannot change role); Admins can update
-      allow update: if (isOwner(studentId) && request.resource.data.role == resource.data.role) || isAdmin();
+      // STRICT SECURITY ENFORCEMENT: Students and Faculty CANNOT modify official registration profiles.
+      // Only authorized Admins can update student profiles (with administrative audit logging).
+      allow update: if isAdmin();
       
       // Only Admins can delete student records
+      allow delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // KMU REGISTRATION COUNTERS (Spark Tier Monotonic Allocation)
+    // =========================================================================
+    match /kmuCounters/{year} {
+      allow get: if true;
+      allow create, update: if isAuthenticated() &&
+        request.resource.data.currentSequence is int &&
+        (resource == null || request.resource.data.currentSequence >= resource.data.currentSequence);
       allow delete: if isAdmin();
     }
 
@@ -86,8 +98,8 @@ service cloud.firestore {
       allow create: if isAuthenticated() &&
         request.resource.data.uid == request.auth.uid;
         
-      // Only Admin or the owning student can update/delete their KMU registration claim
-      allow update, delete: if isAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid);
+      // Registration numbers are immutable for students: Only Admin can update/delete claim
+      allow update, delete: if isAdmin();
     }
 
     // =========================================================================
@@ -170,23 +182,37 @@ service cloud.firestore {
       );
       
       // Teachers and Admins can assign exams to students;
-      // Backend Cloud Functions manage automated candidate enrollment via Firebase Admin SDK
-      allow create: if isAuthenticated() && (isAdmin() || isTeacher());
-      
-      // Student can update status (e.g. started for own assignment) without modifying examId or studentId;
-      // Teachers and Admins have full update access
-      allow update: if isAuthenticated() && (
+      // Eligible students can ensure their own assignment record upon starting an authorized cohort exam
+      allow create: if isAuthenticated() && (
         isAdmin() ||
         isTeacher() ||
+        (isStudent() && request.resource.data.studentId == request.auth.uid)
+      );
+      
+      // Teachers can update/pause assignments for their own exams; Admins can update any;
+      // Students can record answers & heartbeat but CANNOT tamper with pause status
+      allow update: if isAuthenticated() && (
+        isAdmin() ||
+        (isTeacher() && get(/databases/$(database)/documents/exams/$(resource.data.examId)).data.teacherId == request.auth.uid) ||
         (
           isStudent() &&
           resource.data.studentId == request.auth.uid &&
           request.resource.data.studentId == resource.data.studentId &&
-          request.resource.data.examId == resource.data.examId
+          request.resource.data.examId == resource.data.examId &&
+          (!('isPaused' in resource.data) || request.resource.data.isPaused == resource.data.isPaused)
         )
       );
       
-      allow delete: if isAdmin() || isTeacher();
+      allow delete: if isAdmin() || (isTeacher() && get(/databases/$(database)/documents/exams/$(resource.data.examId)).data.teacherId == request.auth.uid);
+    }
+
+    // =========================================================================
+    // AUDIT LOGS COLLECTION
+    // =========================================================================
+    match /auditLogs/{logId} {
+      allow read: if isAuthenticated() && isAdmin();
+      allow create: if isAuthenticated();
+      allow update, delete: if false;
     }
 
     // =========================================================================

@@ -174,10 +174,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const registerStudent = async (data: StudentRegistrationData): Promise<void> => {
+  const registerStudent = async (data: StudentRegistrationData): Promise<string> => {
     setLoading(true);
     try {
-      await authService.registerStudent(data);
+      return await authService.registerStudent(data);
     } finally {
       setLoading(false);
     }

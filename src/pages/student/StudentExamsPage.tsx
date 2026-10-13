@@ -29,6 +29,32 @@ export const StudentExamsPage: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
 
+  // Helper functions for stable question shuffling
+  const reorderByCustomIds = <T extends { id?: string }>(questions: T[], orderIds: string[]): T[] => {
+    const map = new Map<string, T>(questions.map((q) => [q.id || '', q]));
+    const result: T[] = [];
+    for (const id of orderIds) {
+      if (map.has(id)) {
+        result.push(map.get(id)!);
+        map.delete(id);
+      }
+    }
+    // Include any new or unmapped questions
+    for (const rem of map.values()) {
+      result.push(rem);
+    }
+    return result;
+  };
+
+  const stableShuffleQuestions = <T,>(questions: T[]): T[] => {
+    const copy = [...questions];
+    for (let i = copy.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [copy[i], copy[j]] = [copy[j], copy[i]];
+    }
+    return copy;
+  };
+
   // Exam Attempt State (Interactive Testing Screen)
   const [takingExam, setTakingExam] = useState<Exam | null>(null);
   const [examQuestions, setExamQuestions] = useState<Omit<Question, 'correctAnswer' | 'explanation'>[]>([]);
@@ -36,6 +62,9 @@ export const StudentExamsPage: React.FC = () => {
   const [selectedAnswers, setSelectedAnswers] = useState<Record<string | number, number>>({});
   const [flaggedQuestions, setFlaggedQuestions] = useState<Record<number, boolean>>({});
   const [timeLeftSeconds, setTimeLeftSeconds] = useState(3600);
+  const [examStartedAtMs, setExamStartedAtMs] = useState<number | null>(null);
+  const [isExamPaused, setIsExamPaused] = useState(false);
+  const [examPauseMessage, setExamPauseMessage] = useState<string | null>(null);
   const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
   const [examSubmitted, setExamSubmitted] = useState(false);
   const [examScoreSummary, setExamScoreSummary] = useState<{
@@ -96,22 +125,57 @@ export const StudentExamsPage: React.FC = () => {
     return true;
   });
 
-  // Countdown timer for taking exam
+  // Countdown timer: strictly runs continuously (even while paused) based on examStartedAtMs
   useEffect(() => {
     let timer: NodeJS.Timeout;
-    if (takingExam && !examSubmitted && timeLeftSeconds > 0) {
-      timer = setInterval(() => {
-        setTimeLeftSeconds((prev) => {
-          if (prev <= 1) {
-            handleFinalSubmit();
-            return 0;
-          }
-          return prev - 1;
-        });
-      }, 1000);
+    if (takingExam && !examSubmitted && examStartedAtMs) {
+      const totalDurationSec = (takingExam.duration || 60) * 60;
+      const tick = () => {
+        const elapsedSec = Math.floor((Date.now() - examStartedAtMs) / 1000);
+        const remaining = Math.max(0, totalDurationSec - elapsedSec);
+        setTimeLeftSeconds(remaining);
+        if (remaining <= 0 && !examSubmitted) {
+          handleFinalSubmit();
+        }
+      };
+      tick();
+      timer = setInterval(tick, 1000);
     }
     return () => clearInterval(timer);
-  }, [takingExam, examSubmitted, timeLeftSeconds]);
+  }, [takingExam, examSubmitted, examStartedAtMs]);
+
+  // Real-time synchronization for remote pause & candidate heartbeat
+  useEffect(() => {
+    if (!takingExam || !currentUser || examSubmitted) return;
+
+    // 1. Subscribe to assignment document for instant remote pause/resume synchronization
+    const unsubscribe = assignmentService.subscribeToStudentAssignment(
+      takingExam.id,
+      currentUser.uid,
+      (assignment) => {
+        if (!assignment) return;
+        const paused = Boolean(assignment.isPaused);
+        setIsExamPaused(paused);
+        if (paused) {
+          const supervisor = assignment.pausedByName ? ` by ${assignment.pausedByName}` : '';
+          setExamPauseMessage(`Your exam has been paused by the examination supervisor${supervisor}.`);
+        } else {
+          setExamPauseMessage(null);
+        }
+      }
+    );
+
+    // 2. Periodic candidate activity heartbeat (every 20 seconds)
+    assignmentService.recordStudentHeartbeat(takingExam.id, currentUser.uid);
+    const heartbeatInterval = setInterval(() => {
+      assignmentService.recordStudentHeartbeat(takingExam.id, currentUser.uid);
+    }, 20000);
+
+    return () => {
+      unsubscribe();
+      clearInterval(heartbeatInterval);
+    };
+  }, [takingExam, currentUser, examSubmitted]);
 
   const handleStartExam = async (exam: Exam) => {
     // 1. Perform canonical student exam eligibility check & diagnostics
@@ -129,40 +193,69 @@ export const StudentExamsPage: React.FC = () => {
       return;
     }
 
-    // 3. Ensure assignment document exists in Firestore for this eligible candidate
-    if (currentUser) {
-      try {
-        await assignmentService.ensureStudentAssignment({
-          examId: exam.id,
-          studentId: currentUser.uid,
-          batch: studentProfile?.batch || exam.batch || '',
-          semester: studentProfile?.semester || exam.semester || '',
-          program: studentProfile?.program || exam.program || '',
-          assignedBy: 'cohort-verification',
-        });
-      } catch (assignErr) {
-        console.warn('Could not ensure candidate assignment doc:', assignErr);
-      }
-    }
+    if (!currentUser) return;
 
     setTakingExam(exam);
     setCurrentQuestionIndex(0);
     setSelectedAnswers({});
     setFlaggedQuestions({});
-    setTimeLeftSeconds(exam.duration * 60);
     setExamSubmitted(false);
     setExamScoreSummary(null);
     setIsLoadingQuestions(true);
     setExamQuestionsError(null);
+    setIsExamPaused(false);
+    setExamPauseMessage(null);
 
     try {
-      const questions = await questionService.getStudentQuestions(exam.id);
-      setExamQuestions(questions);
-      if (questions.length === 0) {
-        setExamQuestionsError('No examination questions were found for this paper. Please contact your course instructor.');
+      // 3. Register or resume active attempt via assignmentService
+      const attempt = await assignmentService.startStudentAttempt({
+        examId: exam.id,
+        studentId: currentUser.uid,
+        studentName: userProfile?.name || 'Student Candidate',
+        kmuRegistrationNo: studentProfile?.kmuRegistrationNo || '',
+        batch: studentProfile?.batch || exam.batch || '',
+        semester: studentProfile?.semester || exam.semester || '',
+        program: studentProfile?.program || exam.program || '',
+        examTitle: exam.title,
+        durationMinutes: exam.duration || 60,
+      });
+
+      setExamStartedAtMs(attempt.startedAtMs);
+      const elapsedSec = Math.floor((Date.now() - attempt.startedAtMs) / 1000);
+      const totalSec = (exam.duration || 60) * 60;
+      const initialRemaining = Math.max(0, totalSec - elapsedSec);
+      setTimeLeftSeconds(initialRemaining);
+
+      if (attempt.isPaused) {
+        setIsExamPaused(true);
+        setExamPauseMessage('Your exam has been paused by the examination supervisor.');
       }
+
+      // 4. Fetch sanitized questions
+      const rawQuestions = await questionService.getStudentQuestions(exam.id);
+      if (rawQuestions.length === 0) {
+        setExamQuestionsError('No examination questions were found for this paper. Please contact your course instructor.');
+        return;
+      }
+
+      // 5. Question order management (Stable Shuffling vs Original Order)
+      let finalQuestions = rawQuestions;
+      if (exam.shuffleQuestions) {
+        const assignmentId = `${exam.id}_${currentUser.uid}`;
+        if (attempt.shuffledQuestionOrder && attempt.shuffledQuestionOrder.length > 0) {
+          // Attempt already has a saved stable shuffle order: reconstruct it
+          finalQuestions = reorderByCustomIds(rawQuestions, attempt.shuffledQuestionOrder);
+        } else {
+          // First start with shuffle enabled: generate stable shuffle and persist it
+          finalQuestions = stableShuffleQuestions(rawQuestions);
+          const orderIds = finalQuestions.map((q) => q.id || '');
+          await assignmentService.saveShuffledQuestionOrder(assignmentId, orderIds);
+        }
+      }
+
+      setExamQuestions(finalQuestions);
     } catch (err: any) {
-      console.error('Error loading student sanitized questions:', err?.message || err);
+      console.error('Error starting student sanitized questions:', err?.message || err);
       const isPermissionErr =
         err?.code === 'permission-denied' ||
         (err?.message && err.message.toLowerCase().includes('permission'));
@@ -182,7 +275,6 @@ export const StudentExamsPage: React.FC = () => {
         friendlyMsg =
           'Examination questions are temporarily unavailable. Please verify that the examination paper has been published by your instructor, or contact your examination proctor.';
       } else if (isPermissionErr) {
-        // Re-evaluate eligibility for precise, non-combined explanation
         const recheck = checkStudentExamEligibility({
           exam,
           student: studentProfile,
@@ -205,6 +297,7 @@ export const StudentExamsPage: React.FC = () => {
   };
 
   const handleSelectOption = (optIndex: number) => {
+    if (isExamPaused) return;
     const currentQ = examQuestions[currentQuestionIndex];
     setSelectedAnswers((prev) => ({
       ...prev,
@@ -214,6 +307,7 @@ export const StudentExamsPage: React.FC = () => {
   };
 
   const handleToggleFlag = () => {
+    if (isExamPaused) return;
     setFlaggedQuestions((prev) => ({
       ...prev,
       [currentQuestionIndex]: !prev[currentQuestionIndex],
@@ -221,6 +315,7 @@ export const StudentExamsPage: React.FC = () => {
   };
 
   const handleClearAnswer = () => {
+    if (isExamPaused) return;
     const currentQ = examQuestions[currentQuestionIndex];
     setSelectedAnswers((prev) => {
       const copy = { ...prev };
@@ -231,6 +326,8 @@ export const StudentExamsPage: React.FC = () => {
   };
 
   const handleFinalSubmit = async () => {
+    // If paused and timer has NOT expired, block manual submission
+    if (isExamPaused && timeLeftSeconds > 0) return;
     setShowSubmitConfirm(false);
     if (!takingExam || !currentUser) return;
 
@@ -666,6 +763,35 @@ export const StudentExamsPage: React.FC = () => {
           ) : (
             /* Active Exam Layout: Timer, Question, Palette */
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+              {/* Remote Pause Alert Banner */}
+              {isExamPaused && (
+                <div
+                  style={{
+                    backgroundColor: '#fef2f2',
+                    border: '2px solid #ef4444',
+                    borderRadius: 'var(--radius-md)',
+                    padding: '1rem 1.25rem',
+                    color: '#991b1b',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '1rem',
+                    boxShadow: '0 4px 6px -1px rgba(239, 68, 68, 0.1)',
+                  }}
+                >
+                  <div style={{ fontSize: '1.75rem', lineHeight: 1 }}>⏸️</div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 800, fontSize: '1rem', letterSpacing: '-0.01em' }}>
+                      EXAMINATION TEMPORARILY PAUSED
+                    </div>
+                    <div style={{ fontSize: '0.85rem', marginTop: '0.25rem', color: '#b91c1c', lineHeight: 1.4 }}>
+                      {examPauseMessage || 'Your exam has been paused by the examination supervisor.'}{' '}
+                      Question navigation, option changes, and submission are locked until resumed.
+                      Your countdown timer continues to run per official examination guidelines.
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Header Bar: Live Timer & Progress Bar */}
               <div
                 style={{
@@ -732,7 +858,7 @@ export const StudentExamsPage: React.FC = () => {
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
                         <Badge variant="primary">Question {currentQuestionIndex + 1}</Badge>
                         <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--color-slate-600)' }}>
-                          Marks: {currentQuestion.marks}
+                          Marks: {currentQuestion.marks ?? 1}
                         </span>
                       </div>
 
@@ -762,7 +888,9 @@ export const StudentExamsPage: React.FC = () => {
                           return (
                             <div
                               key={idx}
-                              onClick={() => handleSelectOption(idx)}
+                              onClick={() => {
+                                if (!isExamPaused) handleSelectOption(idx);
+                              }}
                               style={{
                                 display: 'flex',
                                 alignItems: 'center',
@@ -771,7 +899,9 @@ export const StudentExamsPage: React.FC = () => {
                                 borderRadius: 'var(--radius-md)',
                                 border: `2px solid ${isSelected ? 'var(--color-primary-800)' : 'var(--color-slate-200)'}`,
                                 backgroundColor: isSelected ? 'var(--color-primary-50)' : '#ffffff',
-                                cursor: 'pointer',
+                                cursor: isExamPaused ? 'not-allowed' : 'pointer',
+                                opacity: isExamPaused ? 0.6 : 1,
+                                pointerEvents: isExamPaused ? 'none' : 'auto',
                                 transition: 'all var(--transition-fast)',
                               }}
                             >
@@ -819,7 +949,7 @@ export const StudentExamsPage: React.FC = () => {
                           variant="outline"
                           size="sm"
                           onClick={() => setCurrentQuestionIndex((prev) => Math.max(0, prev - 1))}
-                          disabled={currentQuestionIndex === 0}
+                          disabled={isExamPaused || currentQuestionIndex === 0}
                         >
                           ← Previous
                         </Button>
@@ -827,7 +957,7 @@ export const StudentExamsPage: React.FC = () => {
                           variant="outline"
                           size="sm"
                           onClick={() => setCurrentQuestionIndex((prev) => Math.min(totalQuestions - 1, prev + 1))}
-                          disabled={currentQuestionIndex === totalQuestions - 1}
+                          disabled={isExamPaused || currentQuestionIndex === totalQuestions - 1}
                         >
                           Next →
                         </Button>
@@ -838,11 +968,12 @@ export const StudentExamsPage: React.FC = () => {
                           variant={flaggedQuestions[currentQuestionIndex] ? 'warning' : 'ghost'}
                           size="sm"
                           onClick={handleToggleFlag}
+                          disabled={isExamPaused}
                         >
                           {flaggedQuestions[currentQuestionIndex] ? '🚩 Flagged' : '🏳 Flag for Review'}
                         </Button>
                         {selectedAnswers[currentQuestionIndex] !== undefined && (
-                          <Button variant="ghost" size="sm" onClick={handleClearAnswer}>
+                          <Button variant="ghost" size="sm" onClick={handleClearAnswer} disabled={isExamPaused}>
                             Clear Answer
                           </Button>
                         )}
@@ -902,7 +1033,10 @@ export const StudentExamsPage: React.FC = () => {
                           <button
                             key={qIdx}
                             type="button"
-                            onClick={() => setCurrentQuestionIndex(qIdx)}
+                            disabled={isExamPaused}
+                            onClick={() => {
+                              if (!isExamPaused) setCurrentQuestionIndex(qIdx);
+                            }}
                             style={{
                               height: '34px',
                               borderRadius: 'var(--radius-sm)',
@@ -911,7 +1045,8 @@ export const StudentExamsPage: React.FC = () => {
                               color,
                               fontWeight: isCurrent ? 800 : 600,
                               fontSize: '0.8rem',
-                              cursor: 'pointer',
+                              cursor: isExamPaused ? 'not-allowed' : 'pointer',
+                              opacity: isExamPaused ? 0.6 : 1,
                             }}
                           >
                             {qIdx + 1}
@@ -942,7 +1077,10 @@ export const StudentExamsPage: React.FC = () => {
                     <Button
                       variant="danger"
                       fullWidth
-                      onClick={() => setShowSubmitConfirm(true)}
+                      disabled={isExamPaused}
+                      onClick={() => {
+                        if (!isExamPaused) setShowSubmitConfirm(true);
+                      }}
                     >
                       Finish &amp; Submit Exam
                     </Button>

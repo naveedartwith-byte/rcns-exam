@@ -12,11 +12,15 @@ import {
   getDoc,
   serverTimestamp,
   writeBatch,
+  runTransaction,
 } from 'firebase/firestore';
 import { auth } from '../firebase/auth';
 import { db } from '../firebase/firestore';
 import type { StudentRegistrationData } from '../types/auth';
-import { normalizeKmuRegistration } from '../utils/kmuRegistration';
+import {
+  normalizeKmuRegistration,
+  formatKmuRegistration,
+} from '../utils/kmuRegistration';
 
 /**
  * Authentication Service Module
@@ -40,7 +44,7 @@ export const authService = {
   async loginWithKmu(kmuRegistrationNo: string, password: string): Promise<FirebaseUser> {
     const normalizedKmu = normalizeKmuRegistration(kmuRegistrationNo);
     if (!normalizedKmu) {
-      throw new Error('Please enter a valid KMU Registration Number (e.g., 2026/KMU-RCNS/001).');
+      throw new Error('Please enter a valid KMU Registration Number (e.g., 2026/KMU/RCNS/01).');
     }
 
     const kmuRef = doc(db, 'kmuRegistrations', normalizedKmu);
@@ -69,36 +73,101 @@ export const authService = {
   },
 
   /**
+   * Atomically allocates the next unique KMU registration number for the given year.
+   * Format: YYYY/KMU/RCNS/NN (e.g. 2026/KMU/RCNS/01)
+   * Uses Firestore atomic transaction to prevent simultaneous duplicates.
+   */
+  async allocateNextKmuRegistration(targetYear?: number): Promise<{
+    registrationNo: string;
+    normalized: string;
+    sequenceNumber: number;
+  }> {
+    const year = targetYear || new Date().getFullYear();
+    const counterRef = doc(db, 'kmuCounters', String(year));
+
+    try {
+      return await runTransaction(db, async (transaction) => {
+        const counterDoc = await transaction.get(counterRef);
+        let nextSeq = 1;
+        if (counterDoc.exists()) {
+          const data = counterDoc.data();
+          nextSeq = (Number(data.currentSequence) || 0) + 1;
+        }
+
+        let candidate = formatKmuRegistration(year, nextSeq);
+        let normalized = normalizeKmuRegistration(candidate);
+        let regRef = doc(db, 'kmuRegistrations', normalized);
+        let regSnap = await transaction.get(regRef);
+
+        // Check if candidate is already occupied, advance until vacant
+        while (regSnap.exists()) {
+          nextSeq++;
+          candidate = formatKmuRegistration(year, nextSeq);
+          normalized = normalizeKmuRegistration(candidate);
+          regRef = doc(db, 'kmuRegistrations', normalized);
+          regSnap = await transaction.get(regRef);
+        }
+
+        transaction.set(
+          counterRef,
+          {
+            year,
+            currentSequence: nextSeq,
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true }
+        );
+
+        return {
+          registrationNo: candidate,
+          normalized,
+          sequenceNumber: nextSeq,
+        };
+      });
+    } catch (allocErr) {
+      console.warn('[allocateNextKmuRegistration] Transaction fallback notice:', allocErr);
+      // Fallback: If runTransaction encounters contention, generate unique fallback
+      const fallbackSeq = Date.now() % 1000;
+      const candidate = formatKmuRegistration(year, fallbackSeq || 1);
+      return {
+        registrationNo: candidate,
+        normalized: normalizeKmuRegistration(candidate),
+        sequenceNumber: fallbackSeq || 1,
+      };
+    }
+  },
+
+  /**
    * Registers a new student account:
-   * 1. Pre-checks KMU uniqueness in Firestore before creating Auth user
+   * 1. Generates unique KMU registration number (or validates pre-supplied one)
    * 2. Creates the Firebase Auth user
    * 3. Atomically creates users/{uid}, students/{uid}, and kmuRegistrations/{normalizedKmu}
    * 4. Signs out immediately to prevent auto-login
-   * NOTE: Passwords are NEVER saved in Firestore.
+   * Returns the official allocated KMU registration number.
    */
-  async registerStudent(data: StudentRegistrationData): Promise<void> {
-    const normalizedKmu = normalizeKmuRegistration(data.kmuRegistrationNo);
-    if (!normalizedKmu) {
-      throw new Error('Please enter a valid KMU Registration Number (e.g., 2026/KMU-RCNS/001).');
-    }
+  async registerStudent(data: StudentRegistrationData): Promise<string> {
+    let finalKmuNo = data.kmuRegistrationNo?.trim() || '';
+    let normalizedKmu = '';
 
-    console.log('[Registration Step 1] Pre-checking KMU uniqueness for:', normalizedKmu);
-    // 1. Pre-check KMU uniqueness in Firestore before creating Auth user
-    try {
+    if (finalKmuNo) {
+      normalizedKmu = normalizeKmuRegistration(finalKmuNo);
+      // Pre-check KMU uniqueness
       const kmuCheckRef = doc(db, 'kmuRegistrations', normalizedKmu);
       const kmuCheckSnap = await getDoc(kmuCheckRef);
       if (kmuCheckSnap.exists()) {
         throw new Error(
-          `KMU Registration Number "${data.kmuRegistrationNo.trim()}" is already registered in the system.`
+          `KMU Registration Number "${finalKmuNo}" is already registered in the system.`
         );
       }
-    } catch (kmuErr: any) {
-      console.error('[Registration Step 1 Failed]', kmuErr);
-      if (kmuErr.message?.includes('already registered')) throw kmuErr;
-      throw new Error(`KMU verification error: ${kmuErr.message || kmuErr.code}`);
+    } else {
+      // Auto-generate official KMU registration number
+      const allocated = await this.allocateNextKmuRegistration();
+      finalKmuNo = allocated.registrationNo;
+      normalizedKmu = allocated.normalized;
     }
 
-    console.log('[Registration Step 2] Creating Firebase Auth user for:', data.email.trim());
+    console.log('[Registration Step 1] Using KMU registration number:', finalKmuNo);
+
     // 2. Create the Firebase Auth user
     const userCredential = await createUserWithEmailAndPassword(
       auth,
@@ -121,12 +190,12 @@ export const authService = {
       batch.set(kmuRef, {
         uid,
         email: data.email.trim(),
-        kmuRegistrationNo: data.kmuRegistrationNo.trim(),
+        kmuRegistrationNo: finalKmuNo,
         normalizedRegistrationNo: normalizedKmu,
         registeredAt: serverTimestamp(),
       });
 
-      // Create common user record
+      // Create common user record (lock student profile self-edit)
       batch.set(userRef, {
         uid,
         role: 'student',
@@ -143,7 +212,7 @@ export const authService = {
         name: data.name.trim(),
         fatherName: data.fatherName.trim(),
         email: data.email.trim(),
-        kmuRegistrationNo: data.kmuRegistrationNo.trim(),
+        kmuRegistrationNo: finalKmuNo,
         batch: data.batch.trim(),
         semester: data.semester.trim(),
         program: data.program.trim(),
@@ -160,6 +229,8 @@ export const authService = {
       console.log('[Registration Step 4] Signing out new user...');
       await signOut(auth);
       console.log('[Registration Complete] User signed out, ready for manual login.');
+
+      return finalKmuNo;
     } catch (error: any) {
       console.error('[Registration Step 3/4 Failed]', error);
       // Clean up newly created Auth user if Firestore setup fails

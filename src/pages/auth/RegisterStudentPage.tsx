@@ -22,6 +22,7 @@ export const RegisterStudentPage: React.FC = () => {
     agreedToTerms: false,
   });
 
+  const [allocatedKmuNo, setAllocatedKmuNo] = useState<string>('');
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isRegistered, setIsRegistered] = useState(false);
@@ -54,11 +55,6 @@ export const RegisterStudentPage: React.FC = () => {
       return;
     }
 
-    if (!formData.kmuRegistrationNo.trim()) {
-      setErrorMessage('KMU Registration Number is mandatory (e.g., 2026/KMU-RCNS/001).');
-      return;
-    }
-
     if (!formData.batch) {
       setErrorMessage('Please select your Batch (e.g., Batch 15th). Batch is required.');
       return;
@@ -86,18 +82,18 @@ export const RegisterStudentPage: React.FC = () => {
 
     setIsLoading(true);
     try {
-      await registerStudent({
+      const allocatedNumber = await registerStudent({
         email: formData.email.trim(),
         password: formData.password,
         name: formData.name.trim(),
         fatherName: formData.fatherName.trim(),
-        kmuRegistrationNo: formData.kmuRegistrationNo.trim(),
         program: formData.program,
         department: formData.department,
         batch: formData.batch,
         semester: formData.semester,
       });
 
+      setAllocatedKmuNo(allocatedNumber);
       setIsRegistered(true);
     } catch (err: unknown) {
       const error = err as { code?: string; message?: string };
@@ -204,10 +200,10 @@ export const RegisterStudentPage: React.FC = () => {
 
               <div>
                 <span style={{ fontSize: '0.75rem', color: 'var(--color-primary-700)', textTransform: 'uppercase', fontWeight: 700 }}>
-                  Student Login ID (KMU Reg)
+                  Student Login ID (KMU Registration Number)
                 </span>
-                <div style={{ fontSize: '0.95rem', fontWeight: 800, color: 'var(--color-primary-800)' }}>
-                  {formData.kmuRegistrationNo}
+                <div style={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--color-primary-800)' }}>
+                  {allocatedKmuNo || 'Generated'}
                 </div>
               </div>
 
@@ -308,15 +304,44 @@ export const RegisterStudentPage: React.FC = () => {
                 </h3>
 
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '1rem' }}>
-                  <Input
-                    label="KMU Registration Number"
-                    placeholder="e.g. 2026/KMU-RCNS/001"
-                    helperText="Your permanent student login identifier"
-                    value={formData.kmuRegistrationNo}
-                    onChange={(e) => setFormData({ ...formData, kmuRegistrationNo: e.target.value })}
-                    required
-                    requiredIndicator
-                  />
+                  {/* Auto-Assigned Institutional KMU Registration Number */}
+                  <div
+                    style={{
+                      padding: '0.85rem 1rem',
+                      backgroundColor: 'var(--color-primary-50)',
+                      borderRadius: 'var(--radius-md)',
+                      border: '1px solid var(--color-primary-200)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      justifyContent: 'center',
+                      gap: '0.25rem',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <span style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--color-primary-900)', textTransform: 'uppercase' }}>
+                        KMU Registration Number
+                      </span>
+                      <span
+                        style={{
+                          fontSize: '0.7rem',
+                          fontWeight: 700,
+                          textTransform: 'uppercase',
+                          padding: '0.15rem 0.5rem',
+                          borderRadius: 'var(--radius-full)',
+                          backgroundColor: '#0f2744',
+                          color: '#ffffff',
+                        }}
+                      >
+                        Auto-Allocated
+                      </span>
+                    </div>
+                    <div style={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--color-primary-950)', letterSpacing: '0.04em' }}>
+                      {new Date().getFullYear()}/KMU/RCNS/XX
+                    </div>
+                    <span style={{ fontSize: '0.74rem', color: 'var(--color-primary-700)' }}>
+                      Assigned automatically upon registration (e.g. {new Date().getFullYear()}/KMU/RCNS/01).
+                    </span>
+                  </div>
 
                   <Select
                     label="Academic Program / Department"

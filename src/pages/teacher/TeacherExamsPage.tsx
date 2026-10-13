@@ -19,6 +19,7 @@ import {
   TableCell,
   TableContainer,
   EmptyState,
+  LoadingSpinner,
 } from '../../components/ui';
 import {
   MOCK_PROGRAMS,
@@ -42,6 +43,7 @@ import {
 import type { Exam } from '../../types/exam';
 import type { Question } from '../../types/question';
 import type { Result } from '../../types/result';
+import type { Assignment } from '../../types/assignment';
 
 export const TeacherExamsPage: React.FC = () => {
   const { currentUser, userProfile } = useAuth();
@@ -91,6 +93,7 @@ export const TeacherExamsPage: React.FC = () => {
     description: '',
     instructions: 'Please answer all multiple choice questions. Zero tolerance for unfair means.',
     status: 'draft' as 'draft' | 'scheduled' | 'active' | 'completed' | 'archived',
+    shuffleQuestions: false,
   });
 
   // Dedicated Cohort Assignment Modal State (ISSUE 2)
@@ -124,6 +127,35 @@ export const TeacherExamsPage: React.FC = () => {
   // Bulk MCQ Import Modal State
   const [isBulkImportModalOpen, setIsBulkImportModalOpen] = useState(false);
   const [bulkImportTargetExam, setBulkImportTargetExam] = useState<Exam | null>(null);
+
+  // Live Exam Proctor & Remote Pause Modal State
+  const [selectedExamForMonitoring, setSelectedExamForMonitoring] = useState<Exam | null>(null);
+  const [monitoringAssignments, setMonitoringAssignments] = useState<Assignment[]>([]);
+  const [isMonitoringLoading, setIsMonitoringLoading] = useState(false);
+  const [monitoringFilter, setMonitoringFilter] = useState<'all' | 'attempting' | 'paused' | 'submitted' | 'not_started'>('all');
+  const [proctorActionNotice, setProctorActionNotice] = useState<string | null>(null);
+
+  // Real-time synchronization for Exam Proctor Console
+  useEffect(() => {
+    if (!selectedExamForMonitoring) {
+      setMonitoringAssignments([]);
+      return;
+    }
+    setIsMonitoringLoading(true);
+    setProctorActionNotice(null);
+
+    const unsubscribe = assignmentService.subscribeToExamAssignments(
+      selectedExamForMonitoring.id,
+      (assignments) => {
+        setMonitoringAssignments(assignments);
+        setIsMonitoringLoading(false);
+      }
+    );
+
+    return () => {
+      unsubscribe();
+    };
+  }, [selectedExamForMonitoring]);
 
   // Submissions & Grading Modal State
   const [selectedExamForGrading, setSelectedExamForGrading] = useState<Exam | null>(null);
@@ -171,6 +203,7 @@ export const TeacherExamsPage: React.FC = () => {
       description: '',
       instructions: 'Please answer all multiple choice questions. Zero tolerance for unfair means.',
       status: 'scheduled',
+      shuffleQuestions: false,
     });
     setIsExamModalOpen(true);
   };
@@ -197,8 +230,57 @@ export const TeacherExamsPage: React.FC = () => {
       description: exam.description || '',
       instructions: exam.instructions || 'Please answer all questions carefully.',
       status: exam.status,
+      shuffleQuestions: Boolean(exam.shuffleQuestions),
     });
     setIsExamModalOpen(true);
+  };
+
+  // Handlers for Live Exam Proctoring & Remote Pause
+  const handleOpenMonitoringModal = (exam: Exam) => {
+    setSelectedExamForMonitoring(exam);
+    setMonitoringFilter('all');
+  };
+
+  const handlePauseStudent = async (studentId: string, studentName?: string) => {
+    if (!selectedExamForMonitoring || !currentUser) return;
+    const isOwnerOrAdmin =
+      selectedExamForMonitoring.teacherId === currentUser.uid || userProfile?.role === 'admin';
+    if (!isOwnerOrAdmin) {
+      alert('Access Restricted: Only the designated exam instructor or an Administrator can pause student attempts.');
+      return;
+    }
+    try {
+      await assignmentService.pauseStudentExam({
+        examId: selectedExamForMonitoring.id,
+        studentId,
+        pausedBy: currentUser.uid,
+        pausedByName: userProfile?.name || 'Faculty Proctor',
+      });
+      setProctorActionNotice(`Successfully paused active attempt for ${studentName || studentId}. Candidate input locked.`);
+    } catch (err: any) {
+      alert(`Error pausing candidate attempt: ${err.message || err}`);
+    }
+  };
+
+  const handleResumeStudent = async (studentId: string, studentName?: string) => {
+    if (!selectedExamForMonitoring || !currentUser) return;
+    const isOwnerOrAdmin =
+      selectedExamForMonitoring.teacherId === currentUser.uid || userProfile?.role === 'admin';
+    if (!isOwnerOrAdmin) {
+      alert('Access Restricted: Only the designated exam instructor or an Administrator can resume student attempts.');
+      return;
+    }
+    try {
+      await assignmentService.resumeStudentExam({
+        examId: selectedExamForMonitoring.id,
+        studentId,
+        resumedBy: currentUser.uid,
+        resumedByName: userProfile?.name || 'Faculty Proctor',
+      });
+      setProctorActionNotice(`Resumed examination attempt for ${studentName || studentId}. Candidate may continue.`);
+    } catch (err: any) {
+      alert(`Error resuming candidate attempt: ${err.message || err}`);
+    }
   };
 
   // Auto-calculate end time based on start time + duration in PKT
@@ -470,6 +552,12 @@ export const TeacherExamsPage: React.FC = () => {
     e.preventDefault();
     if (!selectedExamForQuestions) return;
 
+    const numericMarks = Number(questionForm.marks);
+    if (isNaN(numericMarks) || numericMarks <= 0) {
+      alert('Question marks must be a positive number greater than 0.');
+      return;
+    }
+
     const opts =
       questionForm.type === 'mcq'
         ? [questionForm.optionA, questionForm.optionB, questionForm.optionC, questionForm.optionD]
@@ -484,7 +572,7 @@ export const TeacherExamsPage: React.FC = () => {
               question: questionForm.question,
               options: opts,
               correctAnswer: questionForm.correctAnswer,
-              marks: Number(questionForm.marks),
+              marks: numericMarks,
             }
           : q
       );
@@ -495,7 +583,7 @@ export const TeacherExamsPage: React.FC = () => {
         question: questionForm.question,
         options: opts,
         correctAnswer: questionForm.correctAnswer,
-        marks: Number(questionForm.marks),
+        marks: numericMarks,
         order: questionsList.length + 1,
       };
       updatedList = [...questionsList, newQ];
@@ -504,6 +592,7 @@ export const TeacherExamsPage: React.FC = () => {
     setQuestionsList(updatedList);
     try {
       await questionService.saveQuestionsForExam(selectedExamForQuestions.id, updatedList);
+      fetchTeacherExams();
     } catch (err) {
       console.error('Error saving questions batch:', err);
     }
@@ -517,6 +606,7 @@ export const TeacherExamsPage: React.FC = () => {
     setQuestionsList(updated);
     try {
       await questionService.saveQuestionsForExam(selectedExamForQuestions.id, updated);
+      fetchTeacherExams();
     } catch (err) {
       console.error('Error saving updated question list:', err);
     }
@@ -699,6 +789,16 @@ export const TeacherExamsPage: React.FC = () => {
                           title="Assign to Student Batch & Semester"
                         >
                           👥 Assign
+                        </Button>
+
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          onClick={() => handleOpenMonitoringModal(exam)}
+                          style={{ backgroundColor: '#6d28d9', color: '#ffffff', borderColor: '#6d28d9', fontWeight: 600 }}
+                          title="Real-time Proctoring, Live Attempts & Remote Pause"
+                        >
+                          👁️ Monitor &amp; Pause
                         </Button>
 
                         <Button
@@ -976,6 +1076,17 @@ export const TeacherExamsPage: React.FC = () => {
                 onChange={(e) => setExamForm({ ...examForm, status: e.target.value as any })}
                 required
                 requiredIndicator
+              />
+
+              <Select
+                label="Shuffle Question Order"
+                options={[
+                  { value: 'false', label: 'Disabled (Default - Original question order)' },
+                  { value: 'true', label: 'Enabled (Unique stable shuffle per candidate)' },
+                ]}
+                value={examForm.shuffleQuestions ? 'true' : 'false'}
+                onChange={(e) => setExamForm({ ...examForm, shuffleQuestions: e.target.value === 'true' })}
+                helperText="When enabled, questions are randomized per candidate without altering answer keys or marks"
               />
             </div>
           </div>
@@ -1336,11 +1447,15 @@ export const TeacherExamsPage: React.FC = () => {
             />
 
             <Input
-              label="Marks"
+              label="Marks per Question"
               type="number"
+              min="0.5"
+              step="0.5"
               value={questionForm.marks}
               onChange={(e) => setQuestionForm({ ...questionForm, marks: Number(e.target.value) })}
               required
+              requiredIndicator
+              helperText="Positive numeric mark value (e.g. 1, 2, 5)"
             />
           </div>
 
@@ -1547,6 +1662,297 @@ export const TeacherExamsPage: React.FC = () => {
                         </TableRow>
                       ));
                     })()}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            )}
+          </div>
+        </Modal>
+      )}
+
+      {/* =========================================================================
+          LIVE EXAM MONITORING & REMOTE PROCTORING MODAL
+          ========================================================================= */}
+      {selectedExamForMonitoring && (
+        <Modal
+          isOpen={Boolean(selectedExamForMonitoring)}
+          onClose={() => setSelectedExamForMonitoring(null)}
+          title={`Proctor Console: ${selectedExamForMonitoring.title}`}
+          description={`Live Candidate Attendance, Heartbeats, and Remote Pause Control • ${selectedExamForMonitoring.program} (${selectedExamForMonitoring.batch || 'Cohort'})`}
+          maxWidth="xl"
+          footer={
+            <Button
+              variant="primary"
+              onClick={() => setSelectedExamForMonitoring(null)}
+              style={{ backgroundColor: '#0f2744' }}
+            >
+              Close Proctor Console
+            </Button>
+          }
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+            {/* Ownership / Security Check Banner */}
+            {selectedExamForMonitoring.teacherId !== currentUser?.uid && userProfile?.role !== 'admin' && (
+              <Alert type="warning">
+                Auditor View: You are monitoring an examination authored by {selectedExamForMonitoring.teacherName || 'another faculty member'}. Remote pause and resume actions are restricted to the assigned course examiner and Administrators.
+              </Alert>
+            )}
+
+            {proctorActionNotice && (
+              <Alert type="success" onDismiss={() => setProctorActionNotice(null)}>
+                {proctorActionNotice}
+              </Alert>
+            )}
+
+            {/* Monitoring Metrics Cards */}
+            {(() => {
+              const totalCandidates = monitoringAssignments.length;
+              const attempting = monitoringAssignments.filter(
+                (a) => (a.status === 'started' || a.startedAtMs) && !a.isPaused && a.status !== 'submitted'
+              ).length;
+              const paused = monitoringAssignments.filter((a) => Boolean(a.isPaused)).length;
+              const submitted = monitoringAssignments.filter(
+                (a) => a.status === 'submitted' || a.submittedAt
+              ).length;
+              const notStarted = monitoringAssignments.filter(
+                (a) => a.status === 'assigned' && !a.startedAtMs && !a.startedAt
+              ).length;
+
+              return (
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))',
+                    gap: '0.75rem',
+                  }}
+                >
+                  <Card style={{ padding: '0.85rem', textAlign: 'center', backgroundColor: '#f8fafc' }}>
+                    <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 700, textTransform: 'uppercase' }}>
+                      Enrolled
+                    </div>
+                    <div style={{ fontSize: '1.4rem', fontWeight: 800, color: '#0f172a', marginTop: '0.2rem' }}>
+                      {totalCandidates}
+                    </div>
+                  </Card>
+
+                  <Card style={{ padding: '0.85rem', textAlign: 'center', backgroundColor: '#f0fdf4', borderColor: '#bbf7d0' }}>
+                    <div style={{ fontSize: '0.75rem', color: '#166534', fontWeight: 700, textTransform: 'uppercase' }}>
+                      Active
+                    </div>
+                    <div style={{ fontSize: '1.4rem', fontWeight: 800, color: '#15803d', marginTop: '0.2rem' }}>
+                      {attempting}
+                    </div>
+                  </Card>
+
+                  <Card style={{ padding: '0.85rem', textAlign: 'center', backgroundColor: '#fef2f2', borderColor: '#fecaca' }}>
+                    <div style={{ fontSize: '0.75rem', color: '#991b1b', fontWeight: 700, textTransform: 'uppercase' }}>
+                      Paused
+                    </div>
+                    <div style={{ fontSize: '1.4rem', fontWeight: 800, color: '#b91c1c', marginTop: '0.2rem' }}>
+                      {paused}
+                    </div>
+                  </Card>
+
+                  <Card style={{ padding: '0.85rem', textAlign: 'center', backgroundColor: '#eff6ff', borderColor: '#bfdbfe' }}>
+                    <div style={{ fontSize: '0.75rem', color: '#1e40af', fontWeight: 700, textTransform: 'uppercase' }}>
+                      Submitted
+                    </div>
+                    <div style={{ fontSize: '1.4rem', fontWeight: 800, color: '#2563eb', marginTop: '0.2rem' }}>
+                      {submitted}
+                    </div>
+                  </Card>
+
+                  <Card style={{ padding: '0.85rem', textAlign: 'center', backgroundColor: '#f8fafc' }}>
+                    <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 700, textTransform: 'uppercase' }}>
+                      Not Started
+                    </div>
+                    <div style={{ fontSize: '1.4rem', fontWeight: 800, color: '#475569', marginTop: '0.2rem' }}>
+                      {notStarted}
+                    </div>
+                  </Card>
+                </div>
+              );
+            })()}
+
+            {/* Filter Tabs */}
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+              {[
+                { id: 'all', label: `All Candidates (${monitoringAssignments.length})` },
+                { id: 'attempting', label: 'Active Attempts' },
+                { id: 'paused', label: 'Paused' },
+                { id: 'submitted', label: 'Submitted' },
+                { id: 'not_started', label: 'Not Started' },
+              ].map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setMonitoringFilter(tab.id as any)}
+                  style={{
+                    padding: '0.4rem 0.85rem',
+                    borderRadius: 'var(--radius-md)',
+                    border: `1px solid ${monitoringFilter === tab.id ? '#0f2744' : 'var(--color-slate-200)'}`,
+                    backgroundColor: monitoringFilter === tab.id ? '#0f2744' : '#ffffff',
+                    color: monitoringFilter === tab.id ? '#ffffff' : 'var(--color-slate-700)',
+                    fontSize: '0.825rem',
+                    fontWeight: monitoringFilter === tab.id ? 700 : 500,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Candidate List Table */}
+            {isMonitoringLoading ? (
+              <div style={{ textAlign: 'center', padding: '2rem' }}>
+                <LoadingSpinner size="md" />
+                <div style={{ marginTop: '0.5rem', fontSize: '0.85rem', color: 'var(--color-slate-500)' }}>
+                  Connecting to live candidate telemetry...
+                </div>
+              </div>
+            ) : monitoringAssignments.length === 0 ? (
+              <EmptyState
+                title="No Candidates Assigned Yet"
+                description="Assign this examination to a Batch and Semester to begin monitoring student attempts."
+              />
+            ) : (
+              <TableContainer style={{ maxHeight: '420px', overflowY: 'auto' }}>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Student Candidate</TableHead>
+                      <TableHead>KMU Registration</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Start Time</TableHead>
+                      <TableHead>Telemetry Heartbeat</TableHead>
+                      <TableHead style={{ textAlign: 'right' }}>Remote Proctor Action</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {monitoringAssignments
+                      .filter((a) => {
+                        if (monitoringFilter === 'all') return true;
+                        if (monitoringFilter === 'paused') return Boolean(a.isPaused);
+                        if (monitoringFilter === 'submitted') return a.status === 'submitted' || Boolean(a.submittedAt);
+                        if (monitoringFilter === 'attempting') {
+                          return (a.status === 'started' || Boolean(a.startedAtMs)) && !a.isPaused && a.status !== 'submitted';
+                        }
+                        if (monitoringFilter === 'not_started') {
+                          return a.status === 'assigned' && !a.startedAtMs && !a.startedAt;
+                        }
+                        return true;
+                      })
+                      .map((assign) => {
+                        const isPaused = Boolean(assign.isPaused);
+                        const isSubmitted = assign.status === 'submitted' || Boolean(assign.submittedAt);
+                        const isStarted = (assign.status === 'started' || Boolean(assign.startedAtMs)) && !isSubmitted;
+
+                        const isOwnerOrAdmin =
+                          selectedExamForMonitoring.teacherId === currentUser?.uid || userProfile?.role === 'admin';
+
+                        // Heartbeat format
+                        let heartbeatText = 'No telemetry';
+                        let isOnline = false;
+                        if (assign.lastHeartbeatAtMs || assign.lastHeartbeatAt) {
+                          const now = Date.now();
+                          const lastMs =
+                            assign.lastHeartbeatAtMs ||
+                            (typeof assign.lastHeartbeatAt === 'object' && assign.lastHeartbeatAt && 'toMillis' in assign.lastHeartbeatAt
+                              ? (assign.lastHeartbeatAt as any).toMillis()
+                              : typeof assign.lastHeartbeatAt === 'string'
+                              ? new Date(assign.lastHeartbeatAt).getTime()
+                              : now);
+                          const diffSec = Math.max(0, Math.floor((now - lastMs) / 1000));
+                          if (diffSec <= 45) {
+                            heartbeatText = `🟢 Online (${diffSec}s ago)`;
+                            isOnline = true;
+                          } else if (diffSec < 180) {
+                            heartbeatText = `🟡 Idle (${Math.floor(diffSec / 60)}m ago)`;
+                          } else {
+                            heartbeatText = `⚪ Offline (${Math.floor(diffSec / 60)}m ago)`;
+                          }
+                        }
+
+                        // Start time format
+                        let startText = '—';
+                        if (assign.startedAtMs) {
+                          startText = new Date(assign.startedAtMs).toLocaleTimeString('en-PK', {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            second: '2-digit',
+                          });
+                        } else if (assign.startedAt) {
+                          startText = formatPakistanDateTime(assign.startedAt);
+                        }
+
+                        return (
+                          <TableRow key={assign.id}>
+                            <TableCell>
+                              <div style={{ fontWeight: 700, color: 'var(--color-slate-900)' }}>
+                                {assign.studentName || 'Student Candidate'}
+                              </div>
+                              <div style={{ fontSize: '0.75rem', color: 'var(--color-slate-500)' }}>
+                                {assign.batch || selectedExamForMonitoring.batch} • {assign.semester || selectedExamForMonitoring.semester}
+                              </div>
+                            </TableCell>
+
+                            <TableCell>
+                              <code style={{ fontSize: '0.8rem', fontWeight: 700, color: '#0f2744' }}>
+                                {assign.kmuRegistrationNo || '—'}
+                              </code>
+                            </TableCell>
+
+                            <TableCell>
+                              {isPaused ? (
+                                <Badge variant="danger">⏸️ PAUSED</Badge>
+                              ) : isSubmitted ? (
+                                <Badge variant="default">✓ SUBMITTED</Badge>
+                              ) : isStarted ? (
+                                <Badge variant="success">▶ ATTEMPTING</Badge>
+                              ) : (
+                                <Badge variant="outline">NOT STARTED</Badge>
+                              )}
+                            </TableCell>
+
+                            <TableCell style={{ fontSize: '0.825rem' }}>{startText}</TableCell>
+
+                            <TableCell style={{ fontSize: '0.8rem', color: isOnline ? '#166534' : 'var(--color-slate-600)' }}>
+                              {heartbeatText}
+                            </TableCell>
+
+                            <TableCell style={{ textAlign: 'right' }}>
+                              {isPaused ? (
+                                <Button
+                                  variant="primary"
+                                  size="sm"
+                                  disabled={!isOwnerOrAdmin}
+                                  onClick={() => handleResumeStudent(assign.studentId, assign.studentName)}
+                                  style={{ backgroundColor: '#059669', borderColor: '#059669', fontWeight: 600 }}
+                                  title="Resume student exam timer and unlock question screen"
+                                >
+                                  ▶ Resume Exam
+                                </Button>
+                              ) : isStarted ? (
+                                <Button
+                                  variant="danger"
+                                  size="sm"
+                                  disabled={!isOwnerOrAdmin}
+                                  onClick={() => handlePauseStudent(assign.studentId, assign.studentName)}
+                                  style={{ fontWeight: 600 }}
+                                  title="Temporarily pause student exam and lock inputs"
+                                >
+                                  ⏸️ Remote Pause
+                                </Button>
+                              ) : (
+                                <span style={{ fontSize: '0.75rem', color: 'var(--color-slate-400)' }}>
+                                  {isSubmitted ? 'Attempt Finalized' : 'Awaiting Launch'}
+                                </span>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
                   </TableBody>
                 </Table>
               </TableContainer>

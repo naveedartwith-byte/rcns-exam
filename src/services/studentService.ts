@@ -1,6 +1,7 @@
 import {
   doc,
   getDoc,
+  setDoc,
   updateDoc,
   collection,
   query,
@@ -36,17 +37,80 @@ export const studentService = {
   },
 
   /**
-   * Updates student profile fields (excluding immutable keys like uid/role).
+   * Updates student profile fields (Only permitted by authorized Admin with audit logging).
+   * Direct student self-updating is strictly rejected to preserve official KMU registration records.
    */
   async updateStudentProfile(
-    uid: string,
-    data: Partial<Omit<StudentProfile, 'uid' | 'role' | 'createdAt'>>
+    _uid: string,
+    _data: Partial<Omit<StudentProfile, 'uid' | 'role' | 'createdAt'>>
   ): Promise<void> {
-    const studentRef = doc(db, 'students', uid);
+    throw new Error(
+      'Official student profile fields are locked to preserve institutional examination integrity. Please contact College Administration for amendments.'
+    );
+  },
+
+  /**
+   * Authorized Administrator method to update official student registration profile.
+   * Performs collision checking for KMU registration numbers and records an administrative audit log.
+   */
+  async adminUpdateStudentProfile(
+    studentUid: string,
+    data: Partial<Omit<StudentProfile, 'uid' | 'role' | 'createdAt'>>,
+    adminUid?: string
+  ): Promise<void> {
+    const studentRef = doc(db, 'students', studentUid);
+    const userRef = doc(db, 'users', studentUid);
+
+    // If KMU number is changing, check collision in kmuRegistrations
+    if (data.kmuRegistrationNo) {
+      const normalized = normalizeKmuRegistration(data.kmuRegistrationNo);
+      const kmuRef = doc(db, 'kmuRegistrations', normalized);
+      const kmuSnap = await getDoc(kmuRef);
+      if (kmuSnap.exists() && kmuSnap.data().uid !== studentUid) {
+        throw new Error(
+          `KMU Registration Number "${data.kmuRegistrationNo}" is already allocated to another candidate.`
+        );
+      }
+      // Update KMU reservation doc
+      await setDoc(
+        kmuRef,
+        {
+          uid: studentUid,
+          email: data.email || '',
+          kmuRegistrationNo: data.kmuRegistrationNo,
+          normalizedRegistrationNo: normalized,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+    }
+
     await updateDoc(studentRef, {
       ...data,
       updatedAt: serverTimestamp(),
     });
+
+    // Synchronize common user record if name or email changed
+    const userUpdates: Record<string, any> = { updatedAt: serverTimestamp() };
+    if (data.name) userUpdates.name = data.name;
+    if (data.email) userUpdates.email = data.email;
+    await updateDoc(userRef, userUpdates).catch(() => null);
+
+    // Record administrative audit trail
+    try {
+      const auditCol = collection(db, 'auditLogs');
+      const auditRef = doc(auditCol);
+      await setDoc(auditRef, {
+        id: auditRef.id,
+        action: 'ADMIN_UPDATE_STUDENT_PROFILE',
+        studentUid,
+        adminUid: adminUid || 'authorized-admin',
+        updatedFields: Object.keys(data),
+        timestamp: serverTimestamp(),
+      });
+    } catch (auditErr) {
+      console.warn('Could not record administrative audit trail:', auditErr);
+    }
   },
 
   /**

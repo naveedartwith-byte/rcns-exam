@@ -21,10 +21,13 @@ import {
   LoadingSpinner,
 } from '../../components/ui';
 import { MOCK_PROGRAMS, MOCK_SEMESTERS } from '../../mock/mockData';
+import { useAuth } from '../../hooks/useAuth';
 import { studentService } from '../../services/studentService';
+import { formatKmuRegistration } from '../../utils/kmuRegistration';
 import type { StudentProfile } from '../../types/student';
 
 export const AdminStudentsPage: React.FC = () => {
+  const { currentUser } = useAuth();
   const [students, setStudents] = useState<StudentProfile[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -88,7 +91,7 @@ export const AdminStudentsPage: React.FC = () => {
       name: '',
       fatherName: '',
       email: '',
-      kmuRegistrationNo: `2026/KMU-RCNS/00${students.length + 1}`,
+      kmuRegistrationNo: formatKmuRegistration(new Date().getFullYear(), students.length + 1),
       program: 'BS Nursing (Generic)',
       department: 'Nursing & Allied Health Sciences',
       batch: 'Batch 15th',
@@ -119,16 +122,27 @@ export const AdminStudentsPage: React.FC = () => {
     e.preventDefault();
     if (editingStudent) {
       try {
-        await studentService.updateStudentProfile(editingStudent.uid, {
-          name: formData.name,
-          fatherName: formData.fatherName,
-          phone: formData.phone,
-          address: formData.address,
-        });
-        setNotification(`Student record for ${formData.name} updated successfully.`);
+        await studentService.adminUpdateStudentProfile(
+          editingStudent.uid,
+          {
+            name: formData.name,
+            fatherName: formData.fatherName,
+            email: formData.email,
+            kmuRegistrationNo: formData.kmuRegistrationNo,
+            program: formData.program,
+            department: formData.department,
+            batch: formData.batch,
+            semester: formData.semester,
+            phone: formData.phone,
+            address: formData.address,
+          },
+          currentUser?.uid
+        );
+        setNotification(`Student official dossier for ${formData.name} updated successfully.`);
         fetchStudents();
-      } catch (err) {
-        console.error('Error updating student profile:', err);
+      } catch (err: any) {
+        console.error('Error updating student profile by admin:', err);
+        setNotification(`Update error: ${err.message || 'Failed to update student'}`);
       }
       setEditingStudent(null);
     } else {

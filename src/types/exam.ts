@@ -21,6 +21,7 @@ export interface Exam {
   passingMarks?: number;
   questionCount?: number;
   instructions?: string;
+  shuffleQuestions?: boolean;
   sanitizedQuestions?: StudentQuestion[];
   startAt: Timestamp | string;
   endAt: Timestamp | string;

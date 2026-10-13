@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
-import { Logo, Input, Button, Alert, Checkbox } from '../../components/ui';
+import { getDefaultDashboardRoute } from '../../utils/permissions';
+import { Logo, Input, Button, Alert, Checkbox, LoadingSpinner } from '../../components/ui';
 
 export const LoginPage: React.FC = () => {
-  const { login, loginWithKmu } = useAuth();
+  const { login, loginWithKmu, currentUser, role, loading } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -18,6 +19,35 @@ export const LoginPage: React.FC = () => {
 
   // Determine redirect path
   const from = (location.state as { from?: { pathname: string } })?.from?.pathname;
+
+  // Seamless session restoration: if user is already logged in, route to authorized dashboard
+  useEffect(() => {
+    if (!loading && currentUser && role) {
+      if (from) {
+        if (role === 'student' && from.startsWith('/student')) {
+          navigate(from, { replace: true });
+          return;
+        }
+        if (role === 'teacher' && from.startsWith('/teacher')) {
+          navigate(from, { replace: true });
+          return;
+        }
+        if (role === 'admin' && from.startsWith('/admin')) {
+          navigate(from, { replace: true });
+          return;
+        }
+      }
+      navigate(getDefaultDashboardRoute(role), { replace: true });
+    }
+  }, [currentUser, role, loading, from, navigate]);
+
+  if (loading) {
+    return (
+      <div style={{ display: 'flex', height: '100vh', justifyContent: 'center', alignItems: 'center', backgroundColor: '#0f2744' }}>
+        <LoadingSpinner size="lg" text="Restoring Royal College of Nursing Swat session..." />
+      </div>
+    );
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -38,12 +68,17 @@ export const LoginPage: React.FC = () => {
     setIsLoading(true);
     try {
       if (activePortalTab === 'student') {
-        await loginWithKmu(kmuRegNo.trim(), password);
-        navigate(from || '/student', { replace: true });
+        const userRole = await loginWithKmu(kmuRegNo.trim(), password);
+        const target = from && from.startsWith('/student') ? from : getDefaultDashboardRoute(userRole || 'student');
+        navigate(target, { replace: true });
       } else {
         const userRole = await login(email.trim(), password);
-        const defaultRoute = userRole === 'teacher' ? '/teacher' : '/admin/dashboard';
-        navigate(from || defaultRoute, { replace: true });
+        let target = getDefaultDashboardRoute(userRole);
+        if (from) {
+          if (userRole === 'teacher' && from.startsWith('/teacher')) target = from;
+          if (userRole === 'admin' && from.startsWith('/admin')) target = from;
+        }
+        navigate(target, { replace: true });
       }
     } catch (err: unknown) {
       const error = err as { code?: string; message?: string };
@@ -318,8 +353,8 @@ export const LoginPage: React.FC = () => {
               /* STUDENT LOGIN: KMU Registration Number + Password */
               <Input
                 label="KMU Registration Number"
-                placeholder="2026/KMU-RCNS/001"
-                helperText="Enter your official KMU Registration Number (Not email)"
+                placeholder="2026/KMU/RCNS/01"
+                helperText="Enter your official KMU Registration Number (e.g. 2026/KMU/RCNS/01)"
                 value={kmuRegNo}
                 onChange={(e) => setKmuRegNo(e.target.value)}
                 required

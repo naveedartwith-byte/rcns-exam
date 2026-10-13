@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../hooks/useAuth';
-import { studentService } from '../../services/studentService';
 import {
   Card,
   Avatar,
@@ -12,7 +11,7 @@ import {
 } from '../../components/ui';
 
 export const StudentProfilePage: React.FC = () => {
-  const { currentUser, userProfile, studentProfile } = useAuth();
+  const { userProfile, studentProfile } = useAuth();
 
   const [studentData, setStudentData] = useState({
     name: userProfile?.name || 'Student Candidate',
@@ -47,28 +46,8 @@ export const StudentProfilePage: React.FC = () => {
     }
   }, [userProfile, studentProfile]);
 
-  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
-
-  const handleSaveProfile = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (currentUser) {
-      try {
-        await studentService.updateStudentProfile(currentUser.uid, {
-          name: studentData.name,
-          fatherName: studentData.fatherName,
-          phone: studentData.phone,
-          address: studentData.address,
-        });
-      } catch (err) {
-        console.error('Error updating student profile:', err);
-      }
-    }
-    setIsEditModalOpen(false);
-    setSaveSuccess(true);
-    setTimeout(() => setSaveSuccess(false), 3500);
-  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.75rem', maxWidth: '1000px', margin: '0 auto' }}>
@@ -84,9 +63,29 @@ export const StudentProfilePage: React.FC = () => {
 
       {saveSuccess && (
         <Alert type="success" onDismiss={() => setSaveSuccess(false)}>
-          Profile information updated successfully!
+          Password updated successfully!
         </Alert>
       )}
+
+      {/* Official Registry Lock Notice */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.75rem',
+          padding: '0.85rem 1.25rem',
+          backgroundColor: '#f8fafc',
+          borderRadius: 'var(--radius-md)',
+          border: '1px solid #cbd5e1',
+          fontSize: '0.85rem',
+          color: '#334155',
+        }}
+      >
+        <span style={{ fontSize: '1.1rem' }}>🔒</span>
+        <div style={{ flex: 1, lineHeight: 1.45 }}>
+          <strong>Institutional Registration Dossier:</strong> Official identity, KMU Registration ID, enrolled program, batch, and semester details are permanently locked to ensure examination record integrity. Contact College Administration for any authorized profile amendments.
+        </div>
+      </div>
 
       {/* Main Student Identity Card */}
       <Card>
@@ -135,10 +134,20 @@ export const StudentProfilePage: React.FC = () => {
             </div>
           </div>
 
-          <div style={{ display: 'flex', gap: '0.75rem' }}>
-            <Button variant="outline" size="sm" onClick={() => setIsEditModalOpen(true)}>
-              Edit Profile Info
-            </Button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <span
+              style={{
+                fontSize: '0.78rem',
+                fontWeight: 700,
+                color: 'var(--color-slate-500)',
+                backgroundColor: 'var(--color-slate-100)',
+                padding: '0.35rem 0.65rem',
+                borderRadius: 'var(--radius-sm)',
+                border: '1px solid var(--color-slate-200)',
+              }}
+            >
+              🔒 Profile Locked
+            </span>
             <Button variant="secondary" size="sm" onClick={() => setIsPasswordModalOpen(true)}>
               Change Password
             </Button>
@@ -246,59 +255,7 @@ export const StudentProfilePage: React.FC = () => {
         </div>
       </Card>
 
-      {/* Edit Profile Modal */}
-      <Modal
-        isOpen={isEditModalOpen}
-        onClose={() => setIsEditModalOpen(false)}
-        title="Edit Personal Information"
-        description="Update your contact and personal information."
-        maxWidth="md"
-        footer={
-          <>
-            <Button variant="outline" onClick={() => setIsEditModalOpen(false)}>
-              Cancel
-            </Button>
-            <Button variant="primary" onClick={handleSaveProfile} style={{ backgroundColor: '#0f2744' }}>
-              Save Changes
-            </Button>
-          </>
-        }
-      >
-        <form onSubmit={handleSaveProfile} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-          <Input
-            label="Full Name"
-            value={studentData.name}
-            onChange={(e) => setStudentData({ ...studentData, name: e.target.value })}
-            required
-          />
 
-          <Input
-            label="Father's Name"
-            value={studentData.fatherName}
-            onChange={(e) => setStudentData({ ...studentData, fatherName: e.target.value })}
-            required
-          />
-
-          <Input
-            label="Formal Contact Email"
-            value={studentData.email}
-            onChange={(e) => setStudentData({ ...studentData, email: e.target.value })}
-            helperText="Used for profile records and institutional notifications"
-          />
-
-          <Input
-            label="Contact Phone Number"
-            value={studentData.phone}
-            onChange={(e) => setStudentData({ ...studentData, phone: e.target.value })}
-          />
-
-          <Input
-            label="Residential Address"
-            value={studentData.address}
-            onChange={(e) => setStudentData({ ...studentData, address: e.target.value })}
-          />
-        </form>
-      </Modal>
 
       {/* Change Password Modal */}
       <Modal

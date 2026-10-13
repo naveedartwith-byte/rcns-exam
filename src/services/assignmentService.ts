@@ -7,6 +7,7 @@ import {
   query,
   where,
   getDocs,
+  onSnapshot,
   serverTimestamp,
   writeBatch,
 } from 'firebase/firestore';
@@ -377,6 +378,256 @@ export const assignmentService = {
     const snapshot = await getDoc(assignmentRef);
     if (!snapshot.exists()) return null;
     return { id: snapshot.id, ...snapshot.data() } as Assignment;
+  },
+
+  /**
+   * Real-time subscription to all student assignments for an active exam.
+   * Enables live monitoring for authorized teachers/admins.
+   */
+  subscribeToExamAssignments(examId: string, callback: (assignments: Assignment[]) => void): () => void {
+    if (!examId) return () => {};
+    const assignmentsCol = collection(db, 'assignments');
+    const q = query(assignmentsCol, where('examId', '==', examId));
+
+    return onSnapshot(
+      q,
+      (snapshot) => {
+        const list = snapshot.docs.map(
+          (docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Assignment)
+        );
+        callback(list);
+      },
+      (err) => {
+        console.error('Error in subscribeToExamAssignments:', err);
+      }
+    );
+  },
+
+  /**
+   * Real-time subscription to an individual student's assignment document.
+   * Synchronizes remote pause and resume events to the student's exam interface instantly.
+   */
+  subscribeToStudentAssignment(
+    examIdOrAssignmentId: string,
+    studentIdOrCallback: string | ((assignment: Assignment | null) => void),
+    maybeCallback?: (assignment: Assignment | null) => void
+  ): () => void {
+    if (!examIdOrAssignmentId) return () => {};
+    let assignmentId = examIdOrAssignmentId;
+    let callback: (assignment: Assignment | null) => void;
+
+    if (typeof studentIdOrCallback === 'function') {
+      callback = studentIdOrCallback;
+    } else {
+      assignmentId = `${examIdOrAssignmentId}_${studentIdOrCallback}`;
+      callback = maybeCallback || (() => {});
+    }
+
+    const docRef = doc(db, 'assignments', assignmentId);
+
+    return onSnapshot(
+      docRef,
+      (docSnap) => {
+        if (docSnap.exists()) {
+          callback({ id: docSnap.id, ...docSnap.data() } as Assignment);
+        } else {
+          callback(null);
+        }
+      },
+      (err) => {
+        console.error('Error in subscribeToStudentAssignment:', err);
+      }
+    );
+  },
+
+  /**
+   * Remotely pauses a student's active exam attempt (Authorized Teacher/Admin only).
+   * Synchronizes pause state across devices. Exam timer continues running.
+   */
+  async pauseStudentExam(params: {
+    examId: string;
+    studentId: string;
+    teacherUid?: string;
+    pausedBy?: string;
+    teacherName?: string;
+    pausedByName?: string;
+  }): Promise<void> {
+    const assignmentId = `${params.examId}_${params.studentId}`;
+    const assignRef = doc(db, 'assignments', assignmentId);
+    const supervisorUid = params.teacherUid || params.pausedBy || 'Supervisor';
+    const supervisorName = params.teacherName || params.pausedByName || 'Examination Supervisor';
+
+    await updateDoc(assignRef, {
+      isPaused: true,
+      status: 'paused',
+      pausedAt: serverTimestamp(),
+      pausedBy: supervisorUid,
+      pausedByName: supervisorName,
+    });
+
+    // Record supervisor pause in audit log
+    try {
+      const auditCol = collection(db, 'auditLogs');
+      const logRef = doc(auditCol);
+      await setDoc(logRef, {
+        id: logRef.id,
+        action: 'SUPERVISOR_PAUSED_EXAM',
+        examId: params.examId,
+        studentId: params.studentId,
+        supervisorUid,
+        supervisorName,
+        timestamp: serverTimestamp(),
+      });
+    } catch (err) {
+      console.warn('Audit log write notice:', err);
+    }
+  },
+
+  /**
+   * Remotely resumes an individual student's paused exam attempt (Authorized Teacher/Admin only).
+   */
+  async resumeStudentExam(params: {
+    examId: string;
+    studentId: string;
+    teacherUid?: string;
+    resumedBy?: string;
+    teacherName?: string;
+    resumedByName?: string;
+  }): Promise<void> {
+    const assignmentId = `${params.examId}_${params.studentId}`;
+    const assignRef = doc(db, 'assignments', assignmentId);
+    const supervisorUid = params.teacherUid || params.resumedBy || 'Supervisor';
+    const supervisorName = params.teacherName || params.resumedByName || 'Examination Supervisor';
+
+    await updateDoc(assignRef, {
+      isPaused: false,
+      status: 'started',
+      resumedAt: serverTimestamp(),
+      resumedBy: supervisorUid,
+      resumedByName: supervisorName,
+    });
+
+    // Record supervisor resume in audit log
+    try {
+      const auditCol = collection(db, 'auditLogs');
+      const logRef = doc(auditCol);
+      await setDoc(logRef, {
+        id: logRef.id,
+        action: 'SUPERVISOR_RESUMED_EXAM',
+        examId: params.examId,
+        studentId: params.studentId,
+        supervisorUid: params.teacherUid,
+        timestamp: serverTimestamp(),
+      });
+    } catch (err) {
+      console.warn('Audit log write notice:', err);
+    }
+  },
+
+  /**
+   * Periodic student activity heartbeat during an active exam attempt.
+   */
+  async recordStudentHeartbeat(examId: string, studentId: string): Promise<void> {
+    if (!examId || !studentId) return;
+    const assignmentId = `${examId}_${studentId}`;
+    const assignRef = doc(db, 'assignments', assignmentId);
+
+    await updateDoc(assignRef, {
+      lastHeartbeatAt: serverTimestamp(),
+      lastHeartbeatAtMs: Date.now(),
+    }).catch(() => null);
+  },
+
+  /**
+   * Persists a student's assigned shuffled question order.
+   * Guarantees the question order remains 100% stable across browser refreshes.
+   */
+  async saveShuffledQuestionOrder(assignmentId: string, order: string[]): Promise<void> {
+    if (!assignmentId || !order || order.length === 0) return;
+    const assignRef = doc(db, 'assignments', assignmentId);
+    await updateDoc(assignRef, {
+      shuffledQuestionOrder: order,
+    }).catch(() => null);
+  },
+
+  /**
+   * Starts or resumes a student's exam attempt safely without resetting the countdown timer.
+   */
+  async startStudentAttempt(params: {
+    examId: string;
+    studentId: string;
+    studentName?: string;
+    kmuRegistrationNo?: string;
+    batch?: string;
+    semester?: string;
+    program?: string;
+    examTitle?: string;
+    durationMinutes: number;
+  }): Promise<{ startedAtMs: number; shuffledQuestionOrder?: string[]; isPaused?: boolean }> {
+    const assignmentId = `${params.examId}_${params.studentId}`;
+    const assignRef = doc(db, 'assignments', assignmentId);
+    const snap = await getDoc(assignRef);
+
+    const now = Date.now();
+    if (snap.exists()) {
+      const data = snap.data();
+      const existingStartedAtMs =
+        data.startedAtMs || (data.startedAt ? parseDateToMillis(data.startedAt) : null);
+
+      if (existingStartedAtMs) {
+        // Attempt already in progress: preserve original start time, DO NOT grant extra time!
+        await updateDoc(assignRef, {
+          lastHeartbeatAt: serverTimestamp(),
+          lastHeartbeatAtMs: now,
+        }).catch(() => null);
+
+        return {
+          startedAtMs: existingStartedAtMs,
+          shuffledQuestionOrder: data.shuffledQuestionOrder,
+          isPaused: Boolean(data.isPaused),
+        };
+      }
+
+      // Initial start on existing cohort assignment
+      await updateDoc(assignRef, {
+        status: 'started',
+        startedAt: serverTimestamp(),
+        startedAtMs: now,
+        lastHeartbeatAt: serverTimestamp(),
+        lastHeartbeatAtMs: now,
+        studentName: params.studentName || data.studentName || 'Student Candidate',
+        kmuRegistrationNo: params.kmuRegistrationNo || data.kmuRegistrationNo || '',
+      });
+
+      return {
+        startedAtMs: now,
+        shuffledQuestionOrder: data.shuffledQuestionOrder,
+        isPaused: false,
+      };
+    }
+
+    // Auto-create initial assignment document for candidate
+    await setDoc(assignRef, {
+      id: assignmentId,
+      examId: params.examId,
+      studentId: params.studentId,
+      studentName: params.studentName || 'Student Candidate',
+      kmuRegistrationNo: params.kmuRegistrationNo || '',
+      assignedBy: 'candidate-start',
+      batch: params.batch || '',
+      semester: params.semester || '',
+      program: params.program || '',
+      examTitle: params.examTitle || '',
+      status: 'started',
+      assignedAt: serverTimestamp(),
+      startedAt: serverTimestamp(),
+      startedAtMs: now,
+      lastHeartbeatAt: serverTimestamp(),
+      lastHeartbeatAtMs: now,
+      isPaused: false,
+    });
+
+    return { startedAtMs: now, isPaused: false };
   },
 };
 

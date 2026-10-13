@@ -1,12 +1,22 @@
 import React from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { getDefaultDashboardRoute } from '../utils/permissions';
 import { Logo, Button } from '../components/ui';
 
 export const UnauthorizedPage: React.FC = () => {
-  const { role } = useAuth();
-  const returnRoute = getDefaultDashboardRoute(role);
+  const { role, logout, currentUser } = useAuth();
+  const navigate = useNavigate();
+  const returnRoute = currentUser ? getDefaultDashboardRoute(role) : '/login';
+
+  const handleSwitchAccount = async () => {
+    try {
+      await logout();
+    } catch (err) {
+      console.warn('Logout error during switch account:', err);
+    }
+    navigate('/login', { replace: true });
+  };
 
   return (
     <div
@@ -68,11 +78,9 @@ export const UnauthorizedPage: React.FC = () => {
                 Return to Your Dashboard
               </Button>
             </Link>
-            <Link to="/login" style={{ textDecoration: 'none' }}>
-              <Button variant="outline" size="md">
-                Switch Account
-              </Button>
-            </Link>
+            <Button variant="outline" size="md" onClick={handleSwitchAccount}>
+              Switch Account
+            </Button>
           </div>
         </div>
 

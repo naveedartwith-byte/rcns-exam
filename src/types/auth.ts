@@ -4,6 +4,11 @@ import type { StudentProfile } from './student';
 import type { TeacherProfile } from './teacher';
 import type { AdminProfile } from './admin';
 
+export type { UserProfile, UserRole } from './user';
+export type { StudentProfile } from './student';
+export type { TeacherProfile } from './teacher';
+export type { AdminProfile } from './admin';
+
 export interface AuthState {
   currentUser: FirebaseUser | null;
   userProfile: UserProfile | null;
@@ -19,7 +24,7 @@ export interface StudentRegistrationData {
   password: string;
   name: string;
   fatherName: string;
-  kmuRegistrationNo: string;
+  kmuRegistrationNo?: string;
   batch: string;
   semester: string;
   program: string;
@@ -30,7 +35,7 @@ export interface AuthContextType extends AuthState {
   login: (email: string, password: string) => Promise<UserRole>;
   loginWithKmu: (kmuRegistrationNo: string, password: string) => Promise<UserRole>;
   logout: () => Promise<void>;
-  registerStudent: (data: StudentRegistrationData) => Promise<void>;
+  registerStudent: (data: StudentRegistrationData) => Promise<string>;
   resetPassword: (email: string) => Promise<void>;
 }
 

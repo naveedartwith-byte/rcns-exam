@@ -1,8 +1,23 @@
 import React from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
+import { useAuth } from '../hooks/useAuth';
+import { getDefaultDashboardRoute } from '../utils/permissions';
 import { Logo, Button } from '../components/ui';
 
 export const NotFoundPage: React.FC = () => {
+  const { role, logout, currentUser } = useAuth();
+  const navigate = useNavigate();
+  const returnRoute = currentUser ? getDefaultDashboardRoute(role) : '/login';
+
+  const handleSwitchAccount = async () => {
+    try {
+      await logout();
+    } catch (err) {
+      console.warn('Logout error during switch account:', err);
+    }
+    navigate('/login', { replace: true });
+  };
+
   return (
     <div
       style={{
@@ -51,12 +66,23 @@ export const NotFoundPage: React.FC = () => {
             The requested examination resource, portal route, or result file does not exist or has been relocated.
           </p>
 
-          <div style={{ marginTop: '2rem', display: 'flex', justifyContent: 'center', gap: '1rem' }}>
-            <Link to="/" style={{ textDecoration: 'none' }}>
-              <Button variant="primary" size="lg" style={{ backgroundColor: '#0f2744' }}>
-                Return to Portal
+          <div style={{ marginTop: '2rem', display: 'flex', justifyContent: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+            <Link to={returnRoute} style={{ textDecoration: 'none' }}>
+              <Button variant="primary" size="md" style={{ backgroundColor: '#0f2744' }}>
+                Return to Dashboard
               </Button>
             </Link>
+            {currentUser ? (
+              <Button variant="outline" size="md" onClick={handleSwitchAccount}>
+                Switch Account
+              </Button>
+            ) : (
+              <Link to="/login" style={{ textDecoration: 'none' }}>
+                <Button variant="outline" size="md">
+                  Sign In to Portal
+                </Button>
+              </Link>
+            )}
           </div>
         </div>
 
