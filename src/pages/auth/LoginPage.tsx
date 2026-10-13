@@ -353,8 +353,8 @@ export const LoginPage: React.FC = () => {
               /* STUDENT LOGIN: KMU Registration Number + Password */
               <Input
                 label="KMU Registration Number"
-                placeholder="2026/KMU/RCNS/01"
-                helperText="Enter your official KMU Registration Number (e.g. 2026/KMU/RCNS/01)"
+                placeholder="2026/KMU/RCNS/001"
+                helperText="Enter your official KMU Registration Number (e.g. 2026/KMU/RCNS/001)"
                 value={kmuRegNo}
                 onChange={(e) => setKmuRegNo(e.target.value)}
                 required

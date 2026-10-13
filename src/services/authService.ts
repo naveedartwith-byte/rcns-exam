@@ -20,6 +20,8 @@ import type { StudentRegistrationData } from '../types/auth';
 import {
   normalizeKmuRegistration,
   formatKmuRegistration,
+  sanitizeKmuRegistration,
+  isOfficialKmuFormat,
 } from '../utils/kmuRegistration';
 
 /**
@@ -138,37 +140,66 @@ export const authService = {
   },
 
   /**
+   * Checks whether a KMU registration number is available in Firestore.
+   */
+  async checkKmuAvailability(kmuRegistrationNo: string): Promise<{ available: boolean; error?: string }> {
+    const raw = kmuRegistrationNo?.trim() || '';
+    if (!raw) {
+      return { available: false, error: 'KMU Registration Number is required.' };
+    }
+    const sanitized = sanitizeKmuRegistration(raw);
+    if (!isOfficialKmuFormat(sanitized)) {
+      return {
+        available: false,
+        error: 'Invalid KMU Registration Number format. Expected format: YYYY/KMU/RCNS/NNN (e.g. 2026/KMU/RCNS/001).',
+      };
+    }
+    const normalized = normalizeKmuRegistration(sanitized);
+    const snap = await getDoc(doc(db, 'kmuRegistrations', normalized));
+    if (snap.exists()) {
+      return {
+        available: false,
+        error: `KMU Registration Number "${sanitized}" is already registered in the system.`,
+      };
+    }
+    return { available: true };
+  },
+
+  /**
    * Registers a new student account:
-   * 1. Generates unique KMU registration number (or validates pre-supplied one)
+   * 1. Validates student-provided KMU registration number and verifies uniqueness in Firestore
    * 2. Creates the Firebase Auth user
    * 3. Atomically creates users/{uid}, students/{uid}, and kmuRegistrations/{normalizedKmu}
    * 4. Signs out immediately to prevent auto-login
-   * Returns the official allocated KMU registration number.
+   * Returns the exact validated KMU registration number.
    */
   async registerStudent(data: StudentRegistrationData): Promise<string> {
-    let finalKmuNo = data.kmuRegistrationNo?.trim() || '';
-    let normalizedKmu = '';
-
-    if (finalKmuNo) {
-      normalizedKmu = normalizeKmuRegistration(finalKmuNo);
-      // Pre-check KMU uniqueness
-      const kmuCheckRef = doc(db, 'kmuRegistrations', normalizedKmu);
-      const kmuCheckSnap = await getDoc(kmuCheckRef);
-      if (kmuCheckSnap.exists()) {
-        throw new Error(
-          `KMU Registration Number "${finalKmuNo}" is already registered in the system.`
-        );
-      }
-    } else {
-      // Auto-generate official KMU registration number
-      const allocated = await this.allocateNextKmuRegistration();
-      finalKmuNo = allocated.registrationNo;
-      normalizedKmu = allocated.normalized;
+    const rawKmu = data.kmuRegistrationNo?.trim() || '';
+    if (!rawKmu) {
+      throw new Error('KMU Registration Number is required.');
     }
 
-    console.log('[Registration Step 1] Using KMU registration number:', finalKmuNo);
+    const finalKmuNo = sanitizeKmuRegistration(rawKmu);
+    if (!isOfficialKmuFormat(finalKmuNo)) {
+      throw new Error(
+        'Invalid KMU Registration Number format. Expected format: YYYY/KMU/RCNS/NNN (e.g. 2026/KMU/RCNS/001).'
+      );
+    }
 
-    // 2. Create the Firebase Auth user
+    const normalizedKmu = normalizeKmuRegistration(finalKmuNo);
+
+    // 1. Pre-check KMU uniqueness in Firestore BEFORE creating Firebase Auth user
+    const kmuCheckRef = doc(db, 'kmuRegistrations', normalizedKmu);
+    const kmuCheckSnap = await getDoc(kmuCheckRef);
+    if (kmuCheckSnap.exists()) {
+      throw new Error(
+        `KMU Registration Number "${finalKmuNo}" is already registered in the system.`
+      );
+    }
+
+    console.log('[Registration Step 1] Validated unique KMU registration number:', finalKmuNo);
+
+    // 2. Create the Firebase Auth user (only reached if KMU number is validated & unique)
     const userCredential = await createUserWithEmailAndPassword(
       auth,
       data.email.trim(),

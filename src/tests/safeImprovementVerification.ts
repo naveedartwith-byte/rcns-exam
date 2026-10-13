@@ -13,7 +13,11 @@
 
 import {
   isValidKmuRegistration,
+  isOfficialKmuFormat,
+  sanitizeKmuRegistration,
+  normalizeKmuRegistration,
   formatKmuRegistration,
+  formatKmuRegistration3Digit,
 } from '../utils/kmuRegistration.ts';
 import {
   gradeExamSubmission,
@@ -40,13 +44,20 @@ console.log('ROYAL COLLEGE OF NURSING SWAT - Safe Improvements Verification');
 console.log('================================================================\n');
 
 // ====================================================================
-// TEST SUITE 1: KMU Registration Number Format & Automatic Allocation
+// TEST SUITE 1: KMU Registration Number Format, Sanitization & Uniqueness
 // ====================================================================
-console.log('--- Test Suite 1: KMU Registration Number Format & Allocation ---');
+console.log('--- Test Suite 1: KMU Registration Number Format, Sanitization & Uniqueness ---');
 
-// 1. Format: YYYY/KMU/RCNS/01 (2-digit padding)
+// 1. Placeholder & Target Official Format: YYYY/KMU/RCNS/001 (3-digit sequence)
+const placeholderFormat = '2026/KMU/RCNS/001';
+assert(isValidKmuRegistration(placeholderFormat), `Official format "${placeholderFormat}" is recognized as valid`);
+assert(isOfficialKmuFormat(placeholderFormat), `Strict official check passes for "${placeholderFormat}"`);
+assert(formatKmuRegistration3Digit(2026, 1) === '2026/KMU/RCNS/001', 'formatKmuRegistration3Digit(2026, 1) generates 2026/KMU/RCNS/001');
+
+// 2. Format: YYYY/KMU/RCNS/NN (2-digit sequence compatibility)
 const validOfficial1 = '2026/KMU/RCNS/01';
 assert(isValidKmuRegistration(validOfficial1), `Official format "${validOfficial1}" is recognized as valid`);
+assert(isOfficialKmuFormat(validOfficial1), `Strict official check passes for "${validOfficial1}"`);
 
 const validOfficial10 = '2026/KMU/RCNS/10';
 assert(isValidKmuRegistration(validOfficial10), `Official format "${validOfficial10}" is recognized as valid`);
@@ -54,22 +65,81 @@ assert(isValidKmuRegistration(validOfficial10), `Official format "${validOfficia
 const validOfficial100 = '2026/KMU/RCNS/100';
 assert(isValidKmuRegistration(validOfficial100), `3-digit extension "${validOfficial100}" is recognized as valid`);
 
-// 2. Formatting helper pads correctly
+const validPastYear = '2024/KMU/RCNS/042';
+assert(isValidKmuRegistration(validPastYear), `Previous year format "${validPastYear}" is recognized as valid`);
+assert(isOfficialKmuFormat(validPastYear), `Strict official check passes for "${validPastYear}"`);
+
+// 3. User Input Sanitization (unnecessary whitespace, lowercase input, spaces around slashes)
+assert(
+  sanitizeKmuRegistration('  2026/KMU/RCNS/001  ') === '2026/KMU/RCNS/001',
+  'Leading and trailing whitespace trimmed accurately'
+);
+assert(
+  sanitizeKmuRegistration('2026/kmu/rcns/001') === '2026/KMU/RCNS/001',
+  'Lowercase input sanitized to uppercase'
+);
+assert(
+  sanitizeKmuRegistration(' 2026 / KMU / RCNS / 001 ') === '2026/KMU/RCNS/001',
+  'Whitespace surrounding slashes safely collapsed'
+);
+
+// 4. Formatting helper pads correctly
 assert(formatKmuRegistration(2026, 1) === '2026/KMU/RCNS/01', 'formatKmuRegistration(2026, 1) generates 2026/KMU/RCNS/01');
 assert(formatKmuRegistration(2026, 9) === '2026/KMU/RCNS/09', 'formatKmuRegistration(2026, 9) generates 2026/KMU/RCNS/09');
 assert(formatKmuRegistration(2026, 10) === '2026/KMU/RCNS/10', 'formatKmuRegistration(2026, 10) generates 2026/KMU/RCNS/10');
 assert(formatKmuRegistration(2026, 42) === '2026/KMU/RCNS/42', 'formatKmuRegistration(2026, 42) generates 2026/KMU/RCNS/42');
 
-// 3. Legacy compatibility (hyphen separated KMU-RCNS with 3 digits)
+// 5. Legacy compatibility (hyphen separated KMU-RCNS with 3 digits)
 const legacyFormat = '2026/KMU-RCNS/015';
 assert(isValidKmuRegistration(legacyFormat), `Legacy format "${legacyFormat}" remains valid and backward-compatible`);
 
-// 4. Invalid formats rejected
+// 6. Invalid formats strictly rejected
+assert(!isOfficialKmuFormat('2026/OTHER/RCNS/001'), 'Invalid institution code "OTHER" rejected by official format check');
 assert(!isValidKmuRegistration('2026/OTHER/RCNS/01'), 'Invalid institution code "OTHER" is rejected');
+assert(!isOfficialKmuFormat('2026/KMU/RCNS'), 'Missing sequence number rejected');
+assert(!isOfficialKmuFormat('2026/KMU/RCNS/'), 'Trailing slash without digits rejected');
+assert(!isOfficialKmuFormat('2026/KMU/RCNS/ABC'), 'Alphabetic sequence suffix rejected');
+assert(!isOfficialKmuFormat('26/KMU/RCNS/001'), '2-digit year prefix rejected');
+assert(!isOfficialKmuFormat('99999/KMU/RCNS/001'), 'Out of range year rejected');
 assert(!isValidKmuRegistration('KMU-REG-12345'), 'Arbitrary free text is rejected');
 assert(!isValidKmuRegistration(''), 'Empty string registration is rejected');
 
-// 5. Sequential collision simulation
+// 7. Firestore Uniqueness & Account Creation Guard Simulation
+const mockFirestoreKmuRegistry = new Set<string>(['2026_KMU_RCNS_001', '2026_KMU_RCNS_002']);
+
+function simulateRegistrationPreCheck(inputKmu: string): { allowed: boolean; error?: string } {
+  const sanitized = sanitizeKmuRegistration(inputKmu);
+  if (!isOfficialKmuFormat(sanitized)) {
+    return {
+      allowed: false,
+      error: 'Invalid KMU Registration Number format. Expected format: YYYY/KMU/RCNS/NNN (e.g. 2026/KMU/RCNS/001).',
+    };
+  }
+  const normalized = normalizeKmuRegistration(sanitized);
+  if (mockFirestoreKmuRegistry.has(normalized)) {
+    return {
+      allowed: false,
+      error: `KMU Registration Number "${sanitized}" is already registered in the system.`,
+    };
+  }
+  return { allowed: true };
+}
+
+// Duplicate KMU registration attempt
+const duplicateAttempt = simulateRegistrationPreCheck('2026/KMU/RCNS/001');
+assert(!duplicateAttempt.allowed, 'Duplicate KMU registration number is rejected before account creation');
+assert(duplicateAttempt.error?.includes('already registered') === true, 'Clear duplicate error message returned');
+
+// Vacant KMU registration attempt
+const vacantAttempt = simulateRegistrationPreCheck('2026/KMU/RCNS/003');
+assert(vacantAttempt.allowed, 'Vacant, valid KMU registration number is accepted for registration');
+
+// 8. Student Login ID Mapping Compatibility
+const studentLoginId = '2026/KMU/RCNS/001';
+const normalizedLoginDocId = normalizeKmuRegistration(studentLoginId);
+assert(normalizedLoginDocId === '2026_KMU_RCNS_001', 'Login ID maps accurately to Firestore registry doc ID "2026_KMU_RCNS_001"');
+
+// 9. Sequential collision simulation
 const allocatedNumbers = new Set<string>();
 for (let seq = 1; seq <= 50; seq++) {
   const regNo = formatKmuRegistration(2026, seq);

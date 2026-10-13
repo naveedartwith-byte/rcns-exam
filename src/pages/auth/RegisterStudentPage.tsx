@@ -3,10 +3,12 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
 import { Logo, Input, Select, Button, Alert, Checkbox } from '../../components/ui';
 import { MOCK_PROGRAMS, MOCK_BATCHES, MOCK_SEMESTERS } from '../../mock/mockData';
+import { sanitizeKmuRegistration, isOfficialKmuFormat } from '../../utils/kmuRegistration';
 
 export const RegisterStudentPage: React.FC = () => {
   const { registerStudent } = useAuth();
   const navigate = useNavigate();
+  const currentYear = new Date().getFullYear();
 
   const [formData, setFormData] = useState({
     name: '',
@@ -14,7 +16,7 @@ export const RegisterStudentPage: React.FC = () => {
     email: '',
     password: '',
     confirmPassword: '',
-    kmuRegistrationNo: '',
+    kmuRegistrationNo: `${currentYear}/KMU/RCNS/`,
     program: 'BS Nursing (Generic)',
     department: 'Nursing & Allied Health Sciences',
     batch: '',
@@ -55,6 +57,19 @@ export const RegisterStudentPage: React.FC = () => {
       return;
     }
 
+    const trimmedKmu = sanitizeKmuRegistration(formData.kmuRegistrationNo);
+    if (!trimmedKmu) {
+      setErrorMessage('Please enter your official KMU Registration Number.');
+      return;
+    }
+
+    if (!isOfficialKmuFormat(trimmedKmu)) {
+      setErrorMessage(
+        `Invalid KMU Registration Number format. Please enter your complete official number in the format: YYYY/KMU/RCNS/NNN (e.g. ${currentYear}/KMU/RCNS/001).`
+      );
+      return;
+    }
+
     if (!formData.batch) {
       setErrorMessage('Please select your Batch (e.g., Batch 15th). Batch is required.');
       return;
@@ -82,18 +97,19 @@ export const RegisterStudentPage: React.FC = () => {
 
     setIsLoading(true);
     try {
-      const allocatedNumber = await registerStudent({
+      const registeredNumber = await registerStudent({
         email: formData.email.trim(),
         password: formData.password,
         name: formData.name.trim(),
         fatherName: formData.fatherName.trim(),
+        kmuRegistrationNo: trimmedKmu,
         program: formData.program,
         department: formData.department,
         batch: formData.batch,
         semester: formData.semester,
       });
 
-      setAllocatedKmuNo(allocatedNumber);
+      setAllocatedKmuNo(registeredNumber);
       setIsRegistered(true);
     } catch (err: unknown) {
       const error = err as { code?: string; message?: string };
@@ -203,7 +219,7 @@ export const RegisterStudentPage: React.FC = () => {
                   Student Login ID (KMU Registration Number)
                 </span>
                 <div style={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--color-primary-800)' }}>
-                  {allocatedKmuNo || 'Generated'}
+                  {allocatedKmuNo || sanitizeKmuRegistration(formData.kmuRegistrationNo)}
                 </div>
               </div>
 
@@ -304,44 +320,24 @@ export const RegisterStudentPage: React.FC = () => {
                 </h3>
 
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '1rem' }}>
-                  {/* Auto-Assigned Institutional KMU Registration Number */}
-                  <div
-                    style={{
-                      padding: '0.85rem 1rem',
-                      backgroundColor: 'var(--color-primary-50)',
-                      borderRadius: 'var(--radius-md)',
-                      border: '1px solid var(--color-primary-200)',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      justifyContent: 'center',
-                      gap: '0.25rem',
+                  {/* KMU Registration Number - Official Editable Input */}
+                  <Input
+                    label="KMU Registration Number"
+                    placeholder={`${currentYear}/KMU/RCNS/001`}
+                    value={formData.kmuRegistrationNo}
+                    onChange={(e) => setFormData({ ...formData, kmuRegistrationNo: e.target.value })}
+                    onBlur={() => {
+                      if (formData.kmuRegistrationNo) {
+                        setFormData((prev) => ({
+                          ...prev,
+                          kmuRegistrationNo: sanitizeKmuRegistration(prev.kmuRegistrationNo),
+                        }));
+                      }
                     }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                      <span style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--color-primary-900)', textTransform: 'uppercase' }}>
-                        KMU Registration Number
-                      </span>
-                      <span
-                        style={{
-                          fontSize: '0.7rem',
-                          fontWeight: 700,
-                          textTransform: 'uppercase',
-                          padding: '0.15rem 0.5rem',
-                          borderRadius: 'var(--radius-full)',
-                          backgroundColor: '#0f2744',
-                          color: '#ffffff',
-                        }}
-                      >
-                        Auto-Allocated
-                      </span>
-                    </div>
-                    <div style={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--color-primary-950)', letterSpacing: '0.04em' }}>
-                      {new Date().getFullYear()}/KMU/RCNS/XX
-                    </div>
-                    <span style={{ fontSize: '0.74rem', color: 'var(--color-primary-700)' }}>
-                      Assigned automatically upon registration (e.g. {new Date().getFullYear()}/KMU/RCNS/01).
-                    </span>
-                  </div>
+                    required
+                    requiredIndicator
+                    helperText={`Format: YYYY/KMU/RCNS/NNN (e.g. ${currentYear}/KMU/RCNS/001)`}
+                  />
 
                   <Select
                     label="Academic Program / Department"
