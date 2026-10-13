@@ -3,7 +3,6 @@ import {
   gradeExamSubmission,
 } from '../utils/secureGrading.ts';
 import {
-  parseTimestampToMillis,
   verifyCandidateEligibility,
 } from '../utils/secureExamAuth.ts';
 

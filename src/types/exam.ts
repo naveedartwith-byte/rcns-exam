@@ -1,4 +1,5 @@
 import type { Timestamp } from 'firebase/firestore';
+import type { StudentQuestion } from './question';
 
 export type ExamType = 'quiz' | 'exam' | 'midterm';
 
@@ -20,6 +21,7 @@ export interface Exam {
   passingMarks?: number;
   questionCount?: number;
   instructions?: string;
+  sanitizedQuestions?: StudentQuestion[];
   startAt: Timestamp | string;
   endAt: Timestamp | string;
   status: ExamStatus;

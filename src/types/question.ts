@@ -17,6 +17,22 @@ export interface Question {
   updatedAt?: any;
 }
 
+export type StudentQuestion = Omit<Question, 'correctAnswer' | 'explanation'>;
+
+export interface MasterQuestion {
+  id: string;
+  examId: string;
+  question: string;
+  options: any[];
+  correctAnswer: string | number;
+  marks: number;
+  order: number;
+  explanation?: string;
+  createdBy?: string;
+  createdAt?: any;
+  updatedAt?: any;
+}
+
 export interface ParsedMCQ {
   id: string;
   order: number;

@@ -29,6 +29,7 @@ import { useAuth } from '../../hooks/useAuth';
 import { examService } from '../../services/examService';
 import { questionService } from '../../services/questionService';
 import { assignmentService } from '../../services/assignmentService';
+import { resultService } from '../../services/resultService';
 import { BulkMcqImportModal } from '../../components/teacher/BulkMcqImportModal';
 import {
   formatPakistanDateTime,
@@ -40,6 +41,7 @@ import {
 } from '../../utils/dateTime';
 import type { Exam } from '../../types/exam';
 import type { Question } from '../../types/question';
+import type { Result } from '../../types/result';
 
 export const TeacherExamsPage: React.FC = () => {
   const { currentUser, userProfile } = useAuth();
@@ -122,6 +124,13 @@ export const TeacherExamsPage: React.FC = () => {
   // Bulk MCQ Import Modal State
   const [isBulkImportModalOpen, setIsBulkImportModalOpen] = useState(false);
   const [bulkImportTargetExam, setBulkImportTargetExam] = useState<Exam | null>(null);
+
+  // Submissions & Grading Modal State
+  const [selectedExamForGrading, setSelectedExamForGrading] = useState<Exam | null>(null);
+  const [examSubmissions, setExamSubmissions] = useState<any[]>([]);
+  const [examResults, setExamResults] = useState<Result[]>([]);
+  const [isGradingLoading, setIsGradingLoading] = useState(false);
+  const [gradingNotice, setGradingNotice] = useState<string | null>(null);
 
   // Dialog states
   const [showDeleteExamConfirm, setShowDeleteExamConfirm] = useState<string | null>(null);
@@ -349,6 +358,47 @@ export const TeacherExamsPage: React.FC = () => {
     }
   };
 
+  const handleOpenGradingModal = async (exam: Exam) => {
+    setSelectedExamForGrading(exam);
+    setIsGradingLoading(true);
+    setGradingNotice(null);
+    try {
+      const [submissions, results] = await Promise.all([
+        resultService.getPendingSubmissionsForExam(exam.id),
+        resultService.getResultsByExamId(exam.id),
+      ]);
+      setExamSubmissions(submissions);
+      setExamResults(results);
+    } catch (err) {
+      console.error('Error loading submissions for exam:', err);
+    } finally {
+      setIsGradingLoading(false);
+    }
+  };
+
+  const handleGradeAllSubmissions = async () => {
+    if (!selectedExamForGrading) return;
+    setIsGradingLoading(true);
+    try {
+      const outcome = await resultService.gradeAllPendingSubmissionsForExam(
+        selectedExamForGrading.id,
+        currentUser?.uid
+      );
+      setGradingNotice(`Successfully evaluated & recorded ${outcome.gradedCount} candidate result(s)!`);
+      const [submissions, results] = await Promise.all([
+        resultService.getPendingSubmissionsForExam(selectedExamForGrading.id),
+        resultService.getResultsByExamId(selectedExamForGrading.id),
+      ]);
+      setExamSubmissions(submissions);
+      setExamResults(results);
+    } catch (err: any) {
+      console.error('Error grading submissions:', err);
+      setGradingNotice(`Grading notice: ${err?.message || 'Error occurred during grading.'}`);
+    } finally {
+      setIsGradingLoading(false);
+    }
+  };
+
   const handleDuplicateExam = async (exam: Exam) => {
     if (!currentUser) return;
     try {
@@ -384,6 +434,12 @@ export const TeacherExamsPage: React.FC = () => {
       const qs = await questionService.getQuestionsByExamId(exam.id);
       setQuestionsList(qs);
       setSelectedExamForQuestions((prev) => (prev && prev.id === exam.id ? { ...prev, questionCount: qs.length } : exam));
+      // Spark Free Tier: Ensure sanitized questions are synchronized on the parent exam document
+      if (qs.length > 0 && (!exam.sanitizedQuestions || exam.sanitizedQuestions.length !== qs.length)) {
+        await questionService.syncSanitizedQuestionsForExam(exam.id).catch((syncErr) => {
+          console.warn('Auto-sync sanitized questions note:', syncErr);
+        });
+      }
     } catch (err) {
       console.error('Error loading questions for exam:', err);
     }
@@ -653,6 +709,16 @@ export const TeacherExamsPage: React.FC = () => {
                           title="Manage Questions"
                         >
                           Questions ({exam.questionCount || 0})
+                        </Button>
+
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => handleOpenGradingModal(exam)}
+                          style={{ backgroundColor: '#059669', color: '#ffffff', borderColor: '#059669', fontWeight: 600 }}
+                          title="Review Candidate Submissions & Run Grading"
+                        >
+                          📋 Submissions
                         </Button>
 
                         <Button
@@ -1356,6 +1422,138 @@ export const TeacherExamsPage: React.FC = () => {
           />
         </form>
       </Modal>
+
+      {/* Candidate Submissions & Grading Modal */}
+      {selectedExamForGrading && (
+        <Modal
+          isOpen={Boolean(selectedExamForGrading)}
+          onClose={() => setSelectedExamForGrading(null)}
+          title={`Candidate Submissions & Grading: ${selectedExamForGrading.title}`}
+          description={`Program: ${selectedExamForGrading.program} • Semester: ${selectedExamForGrading.semester} • Total Marks: ${selectedExamForGrading.totalMarks}`}
+          maxWidth="xl"
+          footer={
+            <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+              <div style={{ fontSize: '0.825rem', color: 'var(--color-slate-500)' }}>
+                {examSubmissions.length} submission(s) recorded in academic repository
+              </div>
+              <div style={{ display: 'flex', gap: '0.75rem' }}>
+                {examSubmissions.length > 0 && (
+                  <Button
+                    variant="primary"
+                    onClick={handleGradeAllSubmissions}
+                    disabled={isGradingLoading}
+                    style={{ backgroundColor: '#059669', borderColor: '#059669' }}
+                  >
+                    {isGradingLoading ? 'Grading Submissions...' : '⚡ Grade All Submissions'}
+                  </Button>
+                )}
+                <Button variant="outline" onClick={() => setSelectedExamForGrading(null)}>
+                  Close
+                </Button>
+              </div>
+            </div>
+          }
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+            {gradingNotice && (
+              <Alert type="success" onDismiss={() => setGradingNotice(null)}>
+                {gradingNotice}
+              </Alert>
+            )}
+
+            {isGradingLoading ? (
+              <div style={{ padding: '2rem', textAlign: 'center' }}>
+                <div style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--color-slate-700)' }}>
+                  Processing candidate grading...
+                </div>
+              </div>
+            ) : examSubmissions.length === 0 && examResults.length === 0 ? (
+              <EmptyState
+                title="No Candidate Submissions Found"
+                description="No students have submitted answers for this examination yet."
+              />
+            ) : (
+              <TableContainer>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Candidate</TableHead>
+                      <TableHead>KMU ID</TableHead>
+                      <TableHead>Answers</TableHead>
+                      <TableHead>Score</TableHead>
+                      <TableHead>Percentage</TableHead>
+                      <TableHead>Grade</TableHead>
+                      <TableHead>Status</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {/* Render graded results first, then any pending without result */}
+                    {(() => {
+                      const gradedStudentIds = new Set(examResults.map((r) => r.studentId));
+                      const combinedRows = [
+                        ...examResults,
+                        ...examSubmissions
+                          .filter((s) => !gradedStudentIds.has(s.studentId))
+                          .map((s) => ({
+                            id: s.id,
+                            examId: s.examId,
+                            studentId: s.studentId,
+                            studentName: s.studentName,
+                            kmuRegistrationNo: s.kmuRegistrationNo,
+                            marks: 0,
+                            totalMarks: selectedExamForGrading.totalMarks,
+                            percentage: 0,
+                            passed: false,
+                            status: 'pending' as const,
+                            answersCount: s.answersCount,
+                          })),
+                      ];
+
+                      return combinedRows.map((item) => (
+                        <TableRow key={item.id}>
+                          <TableCell>
+                            <strong>{item.studentName || 'Student Candidate'}</strong>
+                          </TableCell>
+                          <TableCell>{item.kmuRegistrationNo || '—'}</TableCell>
+                          <TableCell>{item.answersCount ?? '—'} MCQs</TableCell>
+                          <TableCell>
+                            {item.status === 'pending' ? (
+                              <span style={{ color: '#d97706', fontStyle: 'italic' }}>Pending Evaluation</span>
+                            ) : (
+                              <strong>{item.marks} / {item.totalMarks}</strong>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            {item.status === 'pending' ? '—' : `${item.percentage}%`}
+                          </TableCell>
+                          <TableCell>
+                            {item.status === 'pending' ? (
+                              <Badge variant="outline">Pending</Badge>
+                            ) : (
+                              <Badge variant={(item.grade || 'Pass').startsWith('A') ? 'success' : 'primary'}>
+                                {item.grade || 'Pass'}
+                              </Badge>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            {item.status === 'pending' ? (
+                              <Badge variant="warning">PENDING</Badge>
+                            ) : item.passed || item.percentage >= 50 ? (
+                              <Badge variant="success">PASSED</Badge>
+                            ) : (
+                              <Badge variant="danger">FAILED</Badge>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ));
+                    })()}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            )}
+          </div>
+        </Modal>
+      )}
 
       {/* Delete Exam Confirmation Dialog */}
       <ConfirmDialog

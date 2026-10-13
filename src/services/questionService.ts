@@ -47,19 +47,59 @@ export const questionService = {
   },
 
   /**
-   * Retrieves sanitized questions for a student taking an exam via secure Cloud Function.
-   * Master question documents with correctAnswer and explanation remain strictly inaccessible.
+   * Retrieves sanitized questions for a student taking an exam.
+   * Spark Free Plan workflow:
+   * 1. Loads sanitized question documents embedded directly on the parent exam document.
+   *    (Strictly strips correctAnswer, explanation, and createdBy).
+   * 2. If a Cloud Function is deployed (Blaze plan fallback), attempts invocation.
+   * 3. Replaces generic 'Internal' failure with a safe, descriptive student diagnostic.
    */
   async getStudentQuestions(examId: string): Promise<StudentQuestion[]> {
+    if (!examId) return [];
+
     try {
-      const getQuestionsFn = httpsCallable<{ examId: string }, { questions: StudentQuestion[] }>(
-        functions,
-        'getStudentExamQuestions'
+      // Step 1: Read the exam document (authorized under Firestore rules for scheduled/active exams)
+      const examRef = doc(db, 'exams', examId);
+      const examSnap = await getDoc(examRef);
+
+      if (examSnap.exists()) {
+        const examData = examSnap.data();
+        if (Array.isArray(examData.sanitizedQuestions) && examData.sanitizedQuestions.length > 0) {
+          // Double-check sanitization: guarantee answer keys and explanations are never delivered to student
+          return examData.sanitizedQuestions.map((q: any, idx: number) => ({
+            id: q.id || `q-${idx + 1}`,
+            examId,
+            question: q.question,
+            options: q.options || [],
+            marks: Number(q.marks) || 1,
+            order: Number(q.order) || idx + 1,
+          }));
+        }
+      }
+
+      // Step 2: Fallback for environments where Cloud Functions are deployed (Blaze plan)
+      try {
+        const getQuestionsFn = httpsCallable<{ examId: string }, { questions: StudentQuestion[] }>(
+          functions,
+          'getStudentExamQuestions'
+        );
+        const response = await getQuestionsFn({ examId });
+        if (response.data?.questions && response.data.questions.length > 0) {
+          return response.data.questions;
+        }
+      } catch (fnErr: any) {
+        // Log diagnostic error in development without leaking secrets or tokens
+        console.warn(
+          `[questionService] Cloud Function unavailable (${fnErr?.code || fnErr?.message}). Spark free plan active.`
+        );
+      }
+
+      // Step 3: Informative error message instead of generic 'Internal'
+      throw new Error(
+        'Examination questions have not yet been synchronized or published by your course instructor. Please contact your instructor to publish the question paper.'
       );
-      const response = await getQuestionsFn({ examId });
-      return response.data?.questions || [];
     } catch (err: any) {
-      console.error('Error invoking getStudentExamQuestions:', err);
+      console.error('Error loading student questions:', err?.message || err);
       throw err;
     }
   },
@@ -128,6 +168,16 @@ export const questionService = {
       await batch.commit();
     }
 
+    // Prepare sanitized student questions (strictly stripped of answer keys)
+    const sanitizedQuestions: StudentQuestion[] = questions.map((q, i) => ({
+      id: q.id || `q-${i + 1}`,
+      examId,
+      question: q.question,
+      options: q.options || [],
+      marks: Number(q.marks) || 2,
+      order: Number(q.order) || i + 1,
+    }));
+
     // Update parent exam metadata
     try {
       const examRef = doc(db, 'exams', examId);
@@ -135,6 +185,7 @@ export const questionService = {
       await updateDoc(examRef, {
         questionCount: questions.length,
         totalMarks: totalMarks || questions.length * 2,
+        sanitizedQuestions,
         updatedAt: serverTimestamp(),
       });
     } catch (err) {
@@ -228,9 +279,23 @@ export const questionService = {
         ? 0
         : existing.reduce((sum, q) => sum + (Number(q.marks) || defaultMarks), 0);
 
+      // Load all questions to generate complete sanitized array for students
+      const allCurrentQuestions = replaceExisting
+        ? preparedQuestions
+        : [...existing, ...preparedQuestions];
+      const sanitizedQuestions: StudentQuestion[] = allCurrentQuestions.map((q, idx) => ({
+        id: q.id,
+        examId,
+        question: q.question,
+        options: q.options || [],
+        marks: Number(q.marks) || defaultMarks,
+        order: Number(q.order) || idx + 1,
+      }));
+
       await updateDoc(examRef, {
         questionCount: totalQuestionsInExam,
         totalMarks: existingMarks + addedMarks,
+        sanitizedQuestions,
         updatedAt: serverTimestamp(),
       });
     } catch (err) {
@@ -243,6 +308,33 @@ export const questionService = {
       skippedCount,
       totalQuestionsInExam,
     };
+  },
+
+  /**
+   * Synchronizes master questions into sanitized questions on the parent exam document.
+   * Can be called by faculty or admin to publish questions for students on the Spark tier.
+   */
+  async syncSanitizedQuestionsForExam(examId: string): Promise<number> {
+    const questions = await this.getQuestionsByExamId(examId);
+    if (questions.length === 0) return 0;
+
+    const sanitizedQuestions: StudentQuestion[] = questions.map((q, idx) => ({
+      id: q.id,
+      examId,
+      question: q.question,
+      options: q.options || [],
+      marks: Number(q.marks) || 1,
+      order: Number(q.order) || idx + 1,
+    }));
+
+    const examRef = doc(db, 'exams', examId);
+    await updateDoc(examRef, {
+      sanitizedQuestions,
+      questionCount: sanitizedQuestions.length,
+      updatedAt: serverTimestamp(),
+    });
+
+    return sanitizedQuestions.length;
   },
 
   /**

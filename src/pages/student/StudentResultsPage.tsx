@@ -59,13 +59,15 @@ export const StudentResultsPage: React.FC = () => {
     return true;
   });
 
-  const totalEvaluated = results.length;
-  const passedCount = results.filter((r) => r.passed || r.percentage >= 50).length;
-  const passRate = totalEvaluated > 0 ? Math.round((passedCount / totalEvaluated) * 100) : 100;
+  const gradedResults = results.filter((r) => r.status === 'graded');
+  const pendingCount = results.filter((r) => r.status === 'pending').length;
+  const totalEvaluated = gradedResults.length;
+  const passedCount = gradedResults.filter((r) => r.passed || r.percentage >= 50).length;
+  const passRate = totalEvaluated > 0 ? Math.round((passedCount / totalEvaluated) * 100) : (pendingCount > 0 ? 0 : 100);
   const avgPercentage =
     totalEvaluated > 0
-      ? (results.reduce((acc, r) => acc + (r.percentage || 0), 0) / totalEvaluated).toFixed(1)
-      : '85.0';
+      ? (gradedResults.reduce((acc, r) => acc + (r.percentage || 0), 0) / totalEvaluated).toFixed(1)
+      : '0.0';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.75rem' }}>
@@ -203,18 +205,40 @@ export const StudentResultsPage: React.FC = () => {
                       <Badge variant="outline">{(r.examType || 'exam').toUpperCase()}</Badge>
                     </TableCell>
                     <TableCell>
-                      <strong style={{ fontSize: '0.95rem', color: 'var(--color-slate-900)' }}>{r.marks}</strong> / {r.totalMarks}
+                      {r.status === 'pending' ? (
+                        <span style={{ fontSize: '0.825rem', color: 'var(--color-slate-500)', fontStyle: 'italic' }}>
+                          Under Review
+                        </span>
+                      ) : (
+                        <>
+                          <strong style={{ fontSize: '0.95rem', color: 'var(--color-slate-900)' }}>{r.marks}</strong> / {r.totalMarks}
+                        </>
+                      )}
                     </TableCell>
                     <TableCell>
-                      <span style={{ fontWeight: 600, color: 'var(--color-slate-800)' }}>{r.percentage}%</span>
+                      {r.status === 'pending' ? (
+                        <span style={{ fontSize: '0.825rem', color: 'var(--color-slate-500)' }}>Pending</span>
+                      ) : (
+                        <span style={{ fontWeight: 600, color: 'var(--color-slate-800)' }}>{r.percentage}%</span>
+                      )}
                     </TableCell>
                     <TableCell>
-                      <Badge variant={(r.grade || 'A').startsWith('A') ? 'success' : 'primary'}>
-                        {r.grade || 'Pass'}
-                      </Badge>
+                      {r.status === 'pending' ? (
+                        <Badge variant="outline">Pending</Badge>
+                      ) : (
+                        <Badge variant={(r.grade || 'A').startsWith('A') ? 'success' : 'primary'}>
+                          {r.grade || 'Pass'}
+                        </Badge>
+                      )}
                     </TableCell>
                     <TableCell>
-                      <Badge variant="success">PASSED</Badge>
+                      {r.status === 'pending' ? (
+                        <Badge variant="warning">PENDING</Badge>
+                      ) : r.passed || r.percentage >= 50 ? (
+                        <Badge variant="success">PASSED</Badge>
+                      ) : (
+                        <Badge variant="danger">FAILED</Badge>
+                      )}
                     </TableCell>
                     <TableCell style={{ textAlign: 'right' }}>
                       <Button
@@ -317,33 +341,52 @@ export const StudentResultsPage: React.FC = () => {
             </div>
 
             {/* Score Grid */}
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(3, 1fr)',
-                gap: '1rem',
-                textAlign: 'center',
-              }}
-            >
-              <div style={{ padding: '1.25rem', borderRadius: 'var(--radius-md)', backgroundColor: 'var(--color-primary-50)', border: '1px solid var(--color-primary-100)' }}>
-                <span style={{ fontSize: '0.8rem', color: 'var(--color-primary-800)', fontWeight: 600 }}>Obtained Marks</span>
-                <div style={{ fontSize: '1.75rem', fontWeight: 800, color: 'var(--color-primary-900)' }}>
-                  {selectedResult.marks} <span style={{ fontSize: '1rem', fontWeight: 500, color: 'var(--color-slate-500)' }}>/ {selectedResult.totalMarks}</span>
+            {selectedResult.status === 'pending' ? (
+              <div
+                style={{
+                  padding: '1.5rem',
+                  backgroundColor: '#fffbeb',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid #fde68a',
+                  textAlign: 'center',
+                }}
+              >
+                <div style={{ fontSize: '1.1rem', fontWeight: 800, color: '#92400e', marginBottom: '0.5rem' }}>
+                  ⏳ Assessment Submission Under Faculty Evaluation
+                </div>
+                <p style={{ fontSize: '0.875rem', color: '#b45309', margin: 0, lineHeight: 1.5 }}>
+                  Your responses for this examination have been securely archived. Official grades, percentage calculations, and KMU transcripts will be generated once verified by your course instructor.
+                </p>
+              </div>
+            ) : (
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(3, 1fr)',
+                  gap: '1rem',
+                  textAlign: 'center',
+                }}
+              >
+                <div style={{ padding: '1.25rem', borderRadius: 'var(--radius-md)', backgroundColor: 'var(--color-primary-50)', border: '1px solid var(--color-primary-100)' }}>
+                  <span style={{ fontSize: '0.8rem', color: 'var(--color-primary-800)', fontWeight: 600 }}>Obtained Marks</span>
+                  <div style={{ fontSize: '1.75rem', fontWeight: 800, color: 'var(--color-primary-900)' }}>
+                    {selectedResult.marks} <span style={{ fontSize: '1rem', fontWeight: 500, color: 'var(--color-slate-500)' }}>/ {selectedResult.totalMarks}</span>
+                  </div>
+                </div>
+                <div style={{ padding: '1.25rem', borderRadius: 'var(--radius-md)', backgroundColor: '#ecfdf5', border: '1px solid #a7f3d0' }}>
+                  <span style={{ fontSize: '0.8rem', color: '#047857', fontWeight: 600 }}>Percentage</span>
+                  <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#065f46' }}>
+                    {selectedResult.percentage}%
+                  </div>
+                </div>
+                <div style={{ padding: '1.25rem', borderRadius: 'var(--radius-md)', backgroundColor: '#fef3c7', border: '1px solid #fde68a' }}>
+                  <span style={{ fontSize: '0.8rem', color: '#b45309', fontWeight: 600 }}>Final Grade</span>
+                  <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#92400e' }}>
+                    {selectedResult.grade || 'Pass'}
+                  </div>
                 </div>
               </div>
-              <div style={{ padding: '1.25rem', borderRadius: 'var(--radius-md)', backgroundColor: '#ecfdf5', border: '1px solid #a7f3d0' }}>
-                <span style={{ fontSize: '0.8rem', color: '#047857', fontWeight: 600 }}>Percentage</span>
-                <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#065f46' }}>
-                  {selectedResult.percentage}%
-                </div>
-              </div>
-              <div style={{ padding: '1.25rem', borderRadius: 'var(--radius-md)', backgroundColor: '#fef3c7', border: '1px solid #fde68a' }}>
-                <span style={{ fontSize: '0.8rem', color: '#b45309', fontWeight: 600 }}>Final Grade</span>
-                <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#92400e' }}>
-                  {selectedResult.grade}
-                </div>
-              </div>
-            </div>
+            )}
 
             <div style={{ fontSize: '0.8rem', color: 'var(--color-slate-500)', fontStyle: 'italic', borderTop: '1px solid var(--color-slate-100)', paddingTop: '0.75rem' }}>
               Note: This is an electronic transcript. Any alteration, forgery, or tampering renders this result document null and void.

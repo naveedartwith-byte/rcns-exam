@@ -33,7 +33,7 @@ export const StudentExamsPage: React.FC = () => {
   const [takingExam, setTakingExam] = useState<Exam | null>(null);
   const [examQuestions, setExamQuestions] = useState<Omit<Question, 'correctAnswer' | 'explanation'>[]>([]);
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
-  const [selectedAnswers, setSelectedAnswers] = useState<Record<number, number>>({});
+  const [selectedAnswers, setSelectedAnswers] = useState<Record<string | number, number>>({});
   const [flaggedQuestions, setFlaggedQuestions] = useState<Record<number, boolean>>({});
   const [timeLeftSeconds, setTimeLeftSeconds] = useState(3600);
   const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
@@ -43,6 +43,9 @@ export const StudentExamsPage: React.FC = () => {
     total: number;
     percentage: number;
     passed: boolean;
+    status?: string;
+    answersCount?: number;
+    totalQuestions?: number;
   } | null>(null);
   const [isLoadingQuestions, setIsLoadingQuestions] = useState(false);
   const [examQuestionsError, setExamQuestionsError] = useState<string | null>(null);
@@ -159,13 +162,26 @@ export const StudentExamsPage: React.FC = () => {
         setExamQuestionsError('No examination questions were found for this paper. Please contact your course instructor.');
       }
     } catch (err: any) {
-      console.error('Error loading student sanitized questions:', err);
+      console.error('Error loading student sanitized questions:', err?.message || err);
       const isPermissionErr =
         err?.code === 'permission-denied' ||
         (err?.message && err.message.toLowerCase().includes('permission'));
 
+      const isInternalOrFunctionErr =
+        err?.code === 'internal' ||
+        err?.code === 'functions/internal' ||
+        err?.code === 'functions/unavailable' ||
+        err?.code === 'functions/not-found' ||
+        (err?.message &&
+          (err.message.toLowerCase() === 'internal' ||
+            err.message.toLowerCase().includes('functions/internal') ||
+            err.message.toLowerCase().includes('internal error')));
+
       let friendlyMsg = err?.message || 'Unable to load examination questions from database.';
-      if (isPermissionErr) {
+      if (isInternalOrFunctionErr) {
+        friendlyMsg =
+          'Examination questions are temporarily unavailable. Please verify that the examination paper has been published by your instructor, or contact your examination proctor.';
+      } else if (isPermissionErr) {
         // Re-evaluate eligibility for precise, non-combined explanation
         const recheck = checkStudentExamEligibility({
           exam,
@@ -189,9 +205,11 @@ export const StudentExamsPage: React.FC = () => {
   };
 
   const handleSelectOption = (optIndex: number) => {
+    const currentQ = examQuestions[currentQuestionIndex];
     setSelectedAnswers((prev) => ({
       ...prev,
       [currentQuestionIndex]: optIndex,
+      ...(currentQ?.id ? { [currentQ.id]: optIndex } : {}),
     }));
   };
 
@@ -203,9 +221,11 @@ export const StudentExamsPage: React.FC = () => {
   };
 
   const handleClearAnswer = () => {
+    const currentQ = examQuestions[currentQuestionIndex];
     setSelectedAnswers((prev) => {
       const copy = { ...prev };
       delete copy[currentQuestionIndex];
+      if (currentQ?.id) delete copy[currentQ.id];
       return copy;
     });
   };
@@ -215,6 +235,11 @@ export const StudentExamsPage: React.FC = () => {
     if (!takingExam || !currentUser) return;
 
     try {
+      // Calculate answered questions count
+      const answeredCount = examQuestions.filter(
+        (q, idx) => selectedAnswers[idx] !== undefined || (q.id && selectedAnswers[q.id] !== undefined)
+      ).length;
+
       const result = await resultService.submitExamAttempt({
         studentId: currentUser.uid,
         studentName: userProfile?.name || 'Student Candidate',
@@ -235,6 +260,9 @@ export const StudentExamsPage: React.FC = () => {
         total: result.totalMarks,
         percentage: result.percentage,
         passed: result.passed ?? result.percentage >= 50,
+        status: result.status || 'pending',
+        answersCount: result.answersCount || answeredCount,
+        totalQuestions: examQuestions.length,
       });
 
       // Update local exam status to completed
@@ -256,7 +284,9 @@ export const StudentExamsPage: React.FC = () => {
   const currentExamQuestions = examQuestions;
   const currentQuestion = currentExamQuestions[currentQuestionIndex];
   const totalQuestions = currentExamQuestions.length;
-  const answeredCount = Object.keys(selectedAnswers).length;
+  const answeredCount = currentExamQuestions.filter(
+    (q, idx) => selectedAnswers[idx] !== undefined || (q.id && selectedAnswers[q.id] !== undefined)
+  ).length;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
@@ -516,39 +546,97 @@ export const StudentExamsPage: React.FC = () => {
                 Your responses have been recorded and timestamped in the ROYAL COLLEGE OF NURSING SWAT academic repository.
               </p>
 
-              <div
-                style={{
-                  maxWidth: '460px',
-                  margin: '1.75rem auto',
-                  padding: '1.25rem',
-                  backgroundColor: 'var(--color-slate-50)',
-                  borderRadius: 'var(--radius-md)',
-                  border: '1px solid var(--color-slate-200)',
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(3, 1fr)',
-                  gap: '1rem',
-                  textAlign: 'center',
-                }}
-              >
-                <div>
-                  <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)' }}>Raw Score</span>
-                  <div style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--color-slate-900)' }}>
-                    {examScoreSummary.score} / {examScoreSummary.total}
+              {examScoreSummary.status === 'pending' ? (
+                <div
+                  style={{
+                    maxWidth: '480px',
+                    margin: '1.75rem auto',
+                    padding: '1.25rem',
+                    backgroundColor: 'var(--color-slate-50)',
+                    borderRadius: 'var(--radius-md)',
+                    border: '1px solid var(--color-slate-200)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '1rem',
+                    textAlign: 'center',
+                  }}
+                >
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(3, 1fr)',
+                      gap: '0.75rem',
+                    }}
+                  >
+                    <div>
+                      <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)' }}>Questions</span>
+                      <div style={{ fontSize: '1.3rem', fontWeight: 800, color: 'var(--color-slate-900)' }}>
+                        {examScoreSummary.totalQuestions ?? totalQuestions}
+                      </div>
+                    </div>
+                    <div>
+                      <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)' }}>Answered</span>
+                      <div style={{ fontSize: '1.3rem', fontWeight: 800, color: '#047857' }}>
+                        {examScoreSummary.answersCount ?? answeredCount}
+                      </div>
+                    </div>
+                    <div>
+                      <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)' }}>Status</span>
+                      <div style={{ fontSize: '0.95rem', fontWeight: 800, color: '#d97706', marginTop: '0.25rem' }}>
+                        PENDING
+                      </div>
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      backgroundColor: '#fffbeb',
+                      border: '1px solid #fef3c7',
+                      borderRadius: 'var(--radius-sm)',
+                      padding: '0.75rem',
+                      fontSize: '0.8rem',
+                      color: '#92400e',
+                      lineHeight: 1.45,
+                    }}
+                  >
+                    Your submission has been securely recorded. Under examination rules, final scores and official transcripts are published once verified by your course examiner.
                   </div>
                 </div>
-                <div>
-                  <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)' }}>Percentage</span>
-                  <div style={{ fontSize: '1.4rem', fontWeight: 800, color: '#047857' }}>
-                    {examScoreSummary.percentage}%
+              ) : (
+                <div
+                  style={{
+                    maxWidth: '460px',
+                    margin: '1.75rem auto',
+                    padding: '1.25rem',
+                    backgroundColor: 'var(--color-slate-50)',
+                    borderRadius: 'var(--radius-md)',
+                    border: '1px solid var(--color-slate-200)',
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(3, 1fr)',
+                    gap: '1rem',
+                    textAlign: 'center',
+                  }}
+                >
+                  <div>
+                    <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)' }}>Raw Score</span>
+                    <div style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--color-slate-900)' }}>
+                      {examScoreSummary.score} / {examScoreSummary.total}
+                    </div>
+                  </div>
+                  <div>
+                    <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)' }}>Percentage</span>
+                    <div style={{ fontSize: '1.4rem', fontWeight: 800, color: '#047857' }}>
+                      {examScoreSummary.percentage}%
+                    </div>
+                  </div>
+                  <div>
+                    <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)' }}>Outcome</span>
+                    <div style={{ fontSize: '1.4rem', fontWeight: 800, color: examScoreSummary.passed ? '#059669' : '#dc2626' }}>
+                      {examScoreSummary.passed ? 'PASSED' : 'FAILED'}
+                    </div>
                   </div>
                 </div>
-                <div>
-                  <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)' }}>Outcome</span>
-                  <div style={{ fontSize: '1.4rem', fontWeight: 800, color: examScoreSummary.percentage >= 50 ? '#059669' : '#dc2626' }}>
-                    {examScoreSummary.percentage >= 50 ? 'PASSED' : 'FAILED'}
-                  </div>
-                </div>
-              </div>
+              )}
 
               <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', marginTop: '1.5rem' }}>
                 <Button variant="primary" onClick={() => setTakingExam(null)} style={{ backgroundColor: '#0f2744' }}>

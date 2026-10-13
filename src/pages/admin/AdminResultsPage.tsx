@@ -266,7 +266,13 @@ export const AdminResultsPage: React.FC = () => {
                     </TableCell>
 
                     <TableCell>
-                      <Badge variant="success">PASSED</Badge>
+                      {r.status === 'pending' ? (
+                        <Badge variant="warning">PENDING</Badge>
+                      ) : r.passed || r.percentage >= 50 ? (
+                        <Badge variant="success">PASSED</Badge>
+                      ) : (
+                        <Badge variant="danger">FAILED</Badge>
+                      )}
                     </TableCell>
 
                     <TableCell style={{ textAlign: 'right' }}>
