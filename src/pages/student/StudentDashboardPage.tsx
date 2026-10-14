@@ -92,9 +92,11 @@ export const StudentDashboardPage: React.FC = () => {
     return () => clearInterval(timer);
   }, []);
 
-  // Filter quizzes and exams by dynamic effective status
-  const activeExams = exams.filter((e) => getEffectiveExamStatus(e) === 'active');
-  const upcomingExams = exams.filter((e) => getEffectiveExamStatus(e) === 'scheduled');
+  // Filter quizzes and exams by dynamic effective status (excluding already-submitted attempts)
+  const isSubmittedExam = (e: Exam) =>
+    e.assignmentStatus === 'submitted' || e.assignmentStatus === 'graded';
+  const activeExams = exams.filter((e) => getEffectiveExamStatus(e) === 'active' && !isSubmittedExam(e));
+  const upcomingExams = exams.filter((e) => getEffectiveExamStatus(e) === 'scheduled' && !isSubmittedExam(e));
   const completedResults = results.slice(0, 5);
   const totalAssigned = exams.length;
   const avgPercentage =

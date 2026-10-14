@@ -21,6 +21,8 @@ export interface Result {
   passed?: boolean;
   answersCount?: number;
   correctCount?: number;
+  incorrectCount?: number;
+  unansweredCount?: number;
   submittedAt: Timestamp | string;
   status: ResultStatus;
 }

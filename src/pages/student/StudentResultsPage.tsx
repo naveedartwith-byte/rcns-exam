@@ -359,32 +359,64 @@ export const StudentResultsPage: React.FC = () => {
                 </p>
               </div>
             ) : (
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(3, 1fr)',
-                  gap: '1rem',
-                  textAlign: 'center',
-                }}
-              >
-                <div style={{ padding: '1.25rem', borderRadius: 'var(--radius-md)', backgroundColor: 'var(--color-primary-50)', border: '1px solid var(--color-primary-100)' }}>
-                  <span style={{ fontSize: '0.8rem', color: 'var(--color-primary-800)', fontWeight: 600 }}>Obtained Marks</span>
-                  <div style={{ fontSize: '1.75rem', fontWeight: 800, color: 'var(--color-primary-900)' }}>
-                    {selectedResult.marks} <span style={{ fontSize: '1rem', fontWeight: 500, color: 'var(--color-slate-500)' }}>/ {selectedResult.totalMarks}</span>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(3, 1fr)',
+                    gap: '1rem',
+                    textAlign: 'center',
+                  }}
+                >
+                  <div style={{ padding: '1.25rem', borderRadius: 'var(--radius-md)', backgroundColor: 'var(--color-primary-50)', border: '1px solid var(--color-primary-100)' }}>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--color-primary-800)', fontWeight: 600 }}>Obtained Marks</span>
+                    <div style={{ fontSize: '1.75rem', fontWeight: 800, color: 'var(--color-primary-900)' }}>
+                      {selectedResult.marks} <span style={{ fontSize: '1rem', fontWeight: 500, color: 'var(--color-slate-500)' }}>/ {selectedResult.totalMarks}</span>
+                    </div>
+                  </div>
+                  <div style={{ padding: '1.25rem', borderRadius: 'var(--radius-md)', backgroundColor: '#ecfdf5', border: '1px solid #a7f3d0' }}>
+                    <span style={{ fontSize: '0.8rem', color: '#047857', fontWeight: 600 }}>Percentage</span>
+                    <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#065f46' }}>
+                      {selectedResult.percentage}%
+                    </div>
+                  </div>
+                  <div style={{ padding: '1.25rem', borderRadius: 'var(--radius-md)', backgroundColor: '#fef3c7', border: '1px solid #fde68a' }}>
+                    <span style={{ fontSize: '0.8rem', color: '#b45309', fontWeight: 600 }}>Final Grade</span>
+                    <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#92400e' }}>
+                      {selectedResult.grade || 'Pass'}
+                    </div>
                   </div>
                 </div>
-                <div style={{ padding: '1.25rem', borderRadius: 'var(--radius-md)', backgroundColor: '#ecfdf5', border: '1px solid #a7f3d0' }}>
-                  <span style={{ fontSize: '0.8rem', color: '#047857', fontWeight: 600 }}>Percentage</span>
-                  <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#065f46' }}>
-                    {selectedResult.percentage}%
+
+                {(selectedResult.correctCount !== undefined || selectedResult.unansweredCount !== undefined) && (
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(3, 1fr)',
+                      gap: '0.75rem',
+                      textAlign: 'center',
+                    }}
+                  >
+                    <div style={{ padding: '0.75rem', borderRadius: 'var(--radius-md)', backgroundColor: '#ecfdf5', border: '1px solid #a7f3d0' }}>
+                      <span style={{ fontSize: '0.75rem', color: '#065f46', fontWeight: 600 }}>Correct Answers</span>
+                      <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#047857', marginTop: '0.15rem' }}>
+                        {selectedResult.correctCount ?? 0}
+                      </div>
+                    </div>
+                    <div style={{ padding: '0.75rem', borderRadius: 'var(--radius-md)', backgroundColor: '#fef2f2', border: '1px solid #fecaca' }}>
+                      <span style={{ fontSize: '0.75rem', color: '#991b1b', fontWeight: 600 }}>Incorrect Answers</span>
+                      <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#dc2626', marginTop: '0.15rem' }}>
+                        {selectedResult.incorrectCount ?? 0}
+                      </div>
+                    </div>
+                    <div style={{ padding: '0.75rem', borderRadius: 'var(--radius-md)', backgroundColor: '#fffbeb', border: '1px solid #fde68a' }}>
+                      <span style={{ fontSize: '0.75rem', color: '#92400e', fontWeight: 600 }}>Unanswered</span>
+                      <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#d97706', marginTop: '0.15rem' }}>
+                        {selectedResult.unansweredCount ?? 0}
+                      </div>
+                    </div>
                   </div>
-                </div>
-                <div style={{ padding: '1.25rem', borderRadius: 'var(--radius-md)', backgroundColor: '#fef3c7', border: '1px solid #fde68a' }}>
-                  <span style={{ fontSize: '0.8rem', color: '#b45309', fontWeight: 600 }}>Final Grade</span>
-                  <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#92400e' }}>
-                    {selectedResult.grade || 'Pass'}
-                  </div>
-                </div>
+                )}
               </div>
             )}
 

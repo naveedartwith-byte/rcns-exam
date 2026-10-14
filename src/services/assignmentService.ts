@@ -287,10 +287,12 @@ export const assignmentService = {
 
           if (!resultExamMap.has(exam.id)) {
             const effectiveStatus = getEffectiveExamStatus(exam);
+            const assign = studentAssignments.find((a) => a.examId === exam.id);
             resultExamMap.set(exam.id, {
               ...exam,
               status: effectiveStatus,
-              assignmentStatus: 'assigned',
+              assignmentStatus: assign ? assign.status : 'assigned',
+              assignmentId: assign ? assign.id : `${exam.id}_${studentId}`,
             });
           }
         }
@@ -571,6 +573,12 @@ export const assignmentService = {
     const now = Date.now();
     if (snap.exists()) {
       const data = snap.data();
+
+      // Permanently lock submitted and graded exam attempts
+      if (data.status === 'submitted' || data.status === 'graded') {
+        throw new Error('You have already submitted this exam.');
+      }
+
       const existingStartedAtMs =
         data.startedAtMs || (data.startedAt ? parseDateToMillis(data.startedAt) : null);
 

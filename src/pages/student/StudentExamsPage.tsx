@@ -75,6 +75,9 @@ export const StudentExamsPage: React.FC = () => {
     status?: string;
     answersCount?: number;
     totalQuestions?: number;
+    correctCount?: number;
+    incorrectCount?: number;
+    unansweredCount?: number;
   } | null>(null);
   const [isLoadingQuestions, setIsLoadingQuestions] = useState(false);
   const [examQuestionsError, setExamQuestionsError] = useState<string | null>(null);
@@ -195,6 +198,12 @@ export const StudentExamsPage: React.FC = () => {
 
     if (!currentUser) return;
 
+    // Lock check: Prevent students from entering a submitted exam attempt
+    if (exam.assignmentStatus === 'submitted' || exam.assignmentStatus === 'graded') {
+      alert('You have already submitted this exam.');
+      return;
+    }
+
     setTakingExam(exam);
     setCurrentQuestionIndex(0);
     setSelectedAnswers({});
@@ -256,6 +265,15 @@ export const StudentExamsPage: React.FC = () => {
       setExamQuestions(finalQuestions);
     } catch (err: any) {
       console.error('Error starting student sanitized questions:', err?.message || err);
+
+      if (
+        err?.message?.toLowerCase().includes('already submitted') ||
+        err?.message?.includes('You have already submitted this exam')
+      ) {
+        alert('You have already submitted this exam.');
+        setTakingExam(null);
+        return;
+      }
       const isPermissionErr =
         err?.code === 'permission-denied' ||
         (err?.message && err.message.toLowerCase().includes('permission'));
@@ -352,22 +370,44 @@ export const StudentExamsPage: React.FC = () => {
       });
 
       setExamSubmitted(true);
+      const totalQ = examQuestions.length;
+      const ansCount = result.answersCount ?? answeredCount;
+      const unansCount = result.unansweredCount ?? Math.max(0, totalQ - ansCount);
+      const corrCount = result.correctCount ?? 0;
+      const incorrCount = result.incorrectCount ?? Math.max(0, ansCount - corrCount);
+
       setExamScoreSummary({
         score: result.marks,
         total: result.totalMarks,
         percentage: result.percentage,
         passed: result.passed ?? result.percentage >= 50,
-        status: result.status || 'pending',
-        answersCount: result.answersCount || answeredCount,
-        totalQuestions: examQuestions.length,
+        status: result.status || 'submitted',
+        answersCount: ansCount,
+        totalQuestions: totalQ,
+        correctCount: corrCount,
+        incorrectCount: incorrCount,
+        unansweredCount: unansCount,
       });
 
-      // Update local exam status to completed
+      // Update local exam status to completed and lock attempt permanently
       setExams((prev) =>
-        prev.map((e) => (e.id === takingExam.id ? { ...e, status: 'completed' } : e))
+        prev.map((e) =>
+          e.id === takingExam.id
+            ? { ...e, status: 'completed', assignmentStatus: 'submitted' }
+            : e
+        )
       );
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error submitting exam:', err);
+      if (
+        err?.message?.toLowerCase().includes('already submitted') ||
+        err?.message?.includes('You have already submitted this exam')
+      ) {
+        alert('You have already submitted this exam.');
+        setTakingExam(null);
+      } else {
+        alert(err?.message || 'Unable to submit examination. Please notify your proctor.');
+      }
     }
   };
 
@@ -463,9 +503,10 @@ export const StudentExamsPage: React.FC = () => {
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: '1.25rem' }}>
           {filteredExams.map((exam) => {
-            const isAvailable = exam.status === 'active';
-            const isCompleted = exam.status === 'completed';
-            const isScheduled = exam.status === 'scheduled';
+            const isSubmitted = exam.assignmentStatus === 'submitted' || exam.assignmentStatus === 'graded';
+            const isAvailable = exam.status === 'active' && !isSubmitted;
+            const isCompleted = exam.status === 'completed' || isSubmitted;
+            const isScheduled = exam.status === 'scheduled' && !isSubmitted;
 
             const statusBadgeConfig = {
               active: { variant: 'success' as const, label: 'Available Now' },
@@ -492,8 +533,8 @@ export const StudentExamsPage: React.FC = () => {
                 <div>
                   {/* Card Header Info */}
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem', marginBottom: '0.75rem' }}>
-                    <Badge variant={statusBadgeConfig[exam.status].variant}>
-                      {statusBadgeConfig[exam.status].label}
+                    <Badge variant={isSubmitted ? 'default' : statusBadgeConfig[exam.status].variant}>
+                      {isSubmitted ? 'Submitted' : statusBadgeConfig[exam.status].label}
                     </Badge>
 
                     <span
@@ -562,7 +603,16 @@ export const StudentExamsPage: React.FC = () => {
                     <strong style={{ color: 'var(--color-slate-700)' }}>{formatPakistanDateTime(exam.startAt)}</strong>
                   </div>
 
-                  {isAvailable && (
+                  {isSubmitted ? (
+                    <Button
+                      variant="secondary"
+                      fullWidth
+                      onClick={() => (window.location.href = '/student/results')}
+                      style={{ backgroundColor: '#f1f5f9', color: '#0f2744', fontWeight: 700 }}
+                    >
+                      Exam Already Submitted • View Result →
+                    </Button>
+                  ) : isAvailable ? (
                     <Button
                       variant="primary"
                       fullWidth
@@ -571,15 +621,11 @@ export const StudentExamsPage: React.FC = () => {
                     >
                       Start Examination Now →
                     </Button>
-                  )}
-
-                  {isScheduled && (
+                  ) : isScheduled ? (
                     <Button variant="outline" fullWidth disabled>
                       Upcoming • Opens at {formatPakistanDateTime(exam.startAt)}
                     </Button>
-                  )}
-
-                  {isCompleted && (
+                  ) : (
                     <Button
                       variant="secondary"
                       fullWidth
@@ -643,99 +689,109 @@ export const StudentExamsPage: React.FC = () => {
                 Your responses have been recorded and timestamped in the ROYAL COLLEGE OF NURSING SWAT academic repository.
               </p>
 
-              {examScoreSummary.status === 'pending' ? (
+              <div
+                style={{
+                  maxWidth: '560px',
+                  margin: '1.75rem auto',
+                  padding: '1.5rem',
+                  backgroundColor: 'var(--color-slate-50)',
+                  borderRadius: 'var(--radius-lg)',
+                  border: '1px solid var(--color-slate-200)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '1.25rem',
+                }}
+              >
+                {/* Score & Outcome Primary KPI Cards */}
                 <div
                   style={{
-                    maxWidth: '480px',
-                    margin: '1.75rem auto',
-                    padding: '1.25rem',
-                    backgroundColor: 'var(--color-slate-50)',
-                    borderRadius: 'var(--radius-md)',
-                    border: '1px solid var(--color-slate-200)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '1rem',
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(3, 1fr)',
+                    gap: '0.75rem',
                     textAlign: 'center',
                   }}
                 >
-                  <div
-                    style={{
-                      display: 'grid',
-                      gridTemplateColumns: 'repeat(3, 1fr)',
-                      gap: '0.75rem',
-                    }}
-                  >
-                    <div>
-                      <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)' }}>Questions</span>
-                      <div style={{ fontSize: '1.3rem', fontWeight: 800, color: 'var(--color-slate-900)' }}>
-                        {examScoreSummary.totalQuestions ?? totalQuestions}
-                      </div>
-                    </div>
-                    <div>
-                      <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)' }}>Answered</span>
-                      <div style={{ fontSize: '1.3rem', fontWeight: 800, color: '#047857' }}>
-                        {examScoreSummary.answersCount ?? answeredCount}
-                      </div>
-                    </div>
-                    <div>
-                      <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)' }}>Status</span>
-                      <div style={{ fontSize: '0.95rem', fontWeight: 800, color: '#d97706', marginTop: '0.25rem' }}>
-                        PENDING
-                      </div>
+                  <div style={{ padding: '0.75rem', backgroundColor: '#ffffff', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-slate-200)' }}>
+                    <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)', fontWeight: 600 }}>Marks Obtained</span>
+                    <div style={{ fontSize: '1.35rem', fontWeight: 800, color: 'var(--color-slate-900)', marginTop: '0.2rem' }}>
+                      {examScoreSummary.score} <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--color-slate-400)' }}>/ {examScoreSummary.total}</span>
                     </div>
                   </div>
 
-                  <div
-                    style={{
-                      backgroundColor: '#fffbeb',
-                      border: '1px solid #fef3c7',
-                      borderRadius: 'var(--radius-sm)',
-                      padding: '0.75rem',
-                      fontSize: '0.8rem',
-                      color: '#92400e',
-                      lineHeight: 1.45,
-                    }}
-                  >
-                    Your submission has been securely recorded. Under examination rules, final scores and official transcripts are published once verified by your course examiner.
-                  </div>
-                </div>
-              ) : (
-                <div
-                  style={{
-                    maxWidth: '460px',
-                    margin: '1.75rem auto',
-                    padding: '1.25rem',
-                    backgroundColor: 'var(--color-slate-50)',
-                    borderRadius: 'var(--radius-md)',
-                    border: '1px solid var(--color-slate-200)',
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(3, 1fr)',
-                    gap: '1rem',
-                    textAlign: 'center',
-                  }}
-                >
-                  <div>
-                    <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)' }}>Raw Score</span>
-                    <div style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--color-slate-900)' }}>
-                      {examScoreSummary.score} / {examScoreSummary.total}
-                    </div>
-                  </div>
-                  <div>
-                    <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)' }}>Percentage</span>
-                    <div style={{ fontSize: '1.4rem', fontWeight: 800, color: '#047857' }}>
+                  <div style={{ padding: '0.75rem', backgroundColor: '#ffffff', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-slate-200)' }}>
+                    <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)', fontWeight: 600 }}>Percentage</span>
+                    <div style={{ fontSize: '1.35rem', fontWeight: 800, color: '#047857', marginTop: '0.2rem' }}>
                       {examScoreSummary.percentage}%
                     </div>
                   </div>
-                  <div>
-                    <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)' }}>Outcome</span>
-                    <div style={{ fontSize: '1.4rem', fontWeight: 800, color: examScoreSummary.passed ? '#059669' : '#dc2626' }}>
+
+                  <div style={{ padding: '0.75rem', backgroundColor: '#ffffff', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-slate-200)' }}>
+                    <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)', fontWeight: 600 }}>Outcome</span>
+                    <div style={{ fontSize: '1.15rem', fontWeight: 800, color: examScoreSummary.passed ? '#059669' : '#dc2626', marginTop: '0.2rem' }}>
                       {examScoreSummary.passed ? 'PASSED' : 'FAILED'}
                     </div>
                   </div>
                 </div>
-              )}
 
-              <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', marginTop: '1.5rem' }}>
+                {/* Question Breakdown Row: Correct, Incorrect, Unanswered */}
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(3, 1fr)',
+                    gap: '0.75rem',
+                    textAlign: 'center',
+                  }}
+                >
+                  <div style={{ padding: '0.75rem', backgroundColor: '#ecfdf5', borderRadius: 'var(--radius-md)', border: '1px solid #a7f3d0' }}>
+                    <span style={{ fontSize: '0.75rem', color: '#065f46', fontWeight: 600 }}>Correct Answers</span>
+                    <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#047857', marginTop: '0.15rem' }}>
+                      {examScoreSummary.correctCount ?? 0}
+                    </div>
+                  </div>
+
+                  <div style={{ padding: '0.75rem', backgroundColor: '#fef2f2', borderRadius: 'var(--radius-md)', border: '1px solid #fecaca' }}>
+                    <span style={{ fontSize: '0.75rem', color: '#991b1b', fontWeight: 600 }}>Incorrect Answers</span>
+                    <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#dc2626', marginTop: '0.15rem' }}>
+                      {examScoreSummary.incorrectCount ?? 0}
+                    </div>
+                  </div>
+
+                  <div style={{ padding: '0.75rem', backgroundColor: '#fffbeb', borderRadius: 'var(--radius-md)', border: '1px solid #fde68a' }}>
+                    <span style={{ fontSize: '0.75rem', color: '#92400e', fontWeight: 600 }}>Unanswered / Skipped</span>
+                    <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#d97706', marginTop: '0.15rem' }}>
+                      {examScoreSummary.unansweredCount ?? 0}
+                    </div>
+                  </div>
+                </div>
+
+                {examScoreSummary.status === 'pending' && (
+                  <div
+                    style={{
+                      backgroundColor: '#eff6ff',
+                      border: '1px solid #dbeafe',
+                      borderRadius: 'var(--radius-sm)',
+                      padding: '0.75rem',
+                      fontSize: '0.8rem',
+                      color: '#1e40af',
+                      lineHeight: 1.45,
+                      textAlign: 'center',
+                    }}
+                  >
+                    Your responses have been recorded in your permanent academic record. Verified official KMU transcripts are finalized upon examiner review.
+                  </div>
+                )}
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', marginTop: '1.5rem', flexWrap: 'wrap' }}>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setTakingExam(null);
+                    window.location.href = '/student/results';
+                  }}
+                >
+                  View Grade Transcript →
+                </Button>
                 <Button variant="primary" onClick={() => setTakingExam(null)} style={{ backgroundColor: '#0f2744' }}>
                   Return to Exams List
                 </Button>
@@ -944,7 +1000,7 @@ export const StudentExamsPage: React.FC = () => {
                         gap: '0.5rem',
                       }}
                     >
-                      <div style={{ display: 'flex', gap: '0.5rem' }}>
+                      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                         <Button
                           variant="outline"
                           size="sm"
@@ -961,6 +1017,19 @@ export const StudentExamsPage: React.FC = () => {
                         >
                           Next →
                         </Button>
+                        {selectedAnswers[currentQuestionIndex] === undefined &&
+                          (!currentQuestion?.id || selectedAnswers[currentQuestion?.id] === undefined) &&
+                          currentQuestionIndex < totalQuestions - 1 && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setCurrentQuestionIndex((prev) => Math.min(totalQuestions - 1, prev + 1))}
+                              disabled={isExamPaused}
+                              style={{ color: 'var(--color-slate-600)', border: '1px dashed var(--color-slate-300)' }}
+                            >
+                              ⏩ Skip Question
+                            </Button>
+                          )}
                       </div>
 
                       <div style={{ display: 'flex', gap: '0.5rem' }}>
@@ -1006,68 +1075,108 @@ export const StudentExamsPage: React.FC = () => {
                           No questions available
                         </div>
                       ) : (
-                        currentExamQuestions.map((_, qIdx) => {
-                        const isAnswered = selectedAnswers[qIdx] !== undefined;
-                        const isCurrent = currentQuestionIndex === qIdx;
-                        const isFlagged = flaggedQuestions[qIdx];
+                        currentExamQuestions.map((q, qIdx) => {
+                          const isAnswered =
+                            selectedAnswers[qIdx] !== undefined ||
+                            (q.id && selectedAnswers[q.id] !== undefined);
+                          const isCurrent = currentQuestionIndex === qIdx;
+                          const isFlagged = Boolean(flaggedQuestions[qIdx]);
 
-                        let bg = '#ffffff';
-                        let color = 'var(--color-slate-700)';
-                        let border = '1px solid var(--color-slate-300)';
+                          let bg = '#ffffff';
+                          let color = 'var(--color-slate-700)';
+                          let border = '1px solid var(--color-slate-300)';
 
-                        if (isAnswered) {
-                          bg = '#059669';
-                          color = '#ffffff';
-                          border = '1px solid #059669';
-                        }
-                        if (isFlagged) {
-                          bg = '#d97706';
-                          color = '#ffffff';
-                          border = '1px solid #d97706';
-                        }
-                        if (isCurrent) {
-                          border = '2px solid #0f2744';
-                        }
+                          if (isAnswered) {
+                            bg = '#059669';
+                            color = '#ffffff';
+                            border = '1px solid #059669';
+                          } else {
+                            // Unanswered / Skipped
+                            bg = '#ffffff';
+                            color = 'var(--color-slate-700)';
+                            border = '1px solid var(--color-slate-300)';
+                          }
 
-                        return (
-                          <button
-                            key={qIdx}
-                            type="button"
-                            disabled={isExamPaused}
-                            onClick={() => {
-                              if (!isExamPaused) setCurrentQuestionIndex(qIdx);
-                            }}
-                            style={{
-                              height: '34px',
-                              borderRadius: 'var(--radius-sm)',
-                              border,
-                              backgroundColor: bg,
-                              color,
-                              fontWeight: isCurrent ? 800 : 600,
-                              fontSize: '0.8rem',
-                              cursor: isExamPaused ? 'not-allowed' : 'pointer',
-                              opacity: isExamPaused ? 0.6 : 1,
-                            }}
-                          >
-                            {qIdx + 1}
-                          </button>
-                        );
-                      }))}
+                          if (isFlagged) {
+                            if (isAnswered) {
+                              bg = '#059669';
+                              color = '#ffffff';
+                              border = '2px solid #f59e0b';
+                            } else {
+                              bg = '#d97706';
+                              color = '#ffffff';
+                              border = '1px solid #d97706';
+                            }
+                          }
+
+                          if (isCurrent) {
+                            border = '2px solid #0f2744';
+                          }
+
+                          return (
+                            <button
+                              key={qIdx}
+                              type="button"
+                              disabled={isExamPaused}
+                              onClick={() => {
+                                if (!isExamPaused) setCurrentQuestionIndex(qIdx);
+                              }}
+                              title={`Question ${qIdx + 1}: ${
+                                isAnswered
+                                  ? isFlagged
+                                    ? 'Answered & Flagged'
+                                    : 'Answered'
+                                  : isFlagged
+                                  ? 'Skipped / Unanswered & Flagged'
+                                  : 'Unanswered / Skipped'
+                              }`}
+                              style={{
+                                position: 'relative',
+                                height: '34px',
+                                borderRadius: 'var(--radius-sm)',
+                                border,
+                                backgroundColor: bg,
+                                color,
+                                fontWeight: isCurrent ? 800 : 600,
+                                fontSize: '0.8rem',
+                                cursor: isExamPaused ? 'not-allowed' : 'pointer',
+                                opacity: isExamPaused ? 0.6 : 1,
+                                boxShadow: isCurrent ? '0 0 0 2px rgba(15, 39, 68, 0.25)' : 'none',
+                              }}
+                            >
+                              {qIdx + 1}
+                              {isFlagged && (
+                                <span
+                                  style={{
+                                    position: 'absolute',
+                                    top: '-4px',
+                                    right: '-3px',
+                                    fontSize: '9px',
+                                    lineHeight: 1,
+                                  }}
+                                >
+                                  🚩
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })
+                      )}
                     </div>
 
                     {/* Legend */}
-                    <div style={{ marginTop: '1.25rem', fontSize: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.35rem', color: 'var(--color-slate-600)' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                        <span style={{ width: '10px', height: '10px', backgroundColor: '#059669', borderRadius: '2px' }} />
+                    <div style={{ marginTop: '1.25rem', fontSize: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.4rem', color: 'var(--color-slate-600)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span style={{ width: '12px', height: '12px', backgroundColor: '#059669', borderRadius: '2px', display: 'inline-block' }} />
                         <span>Answered ({answeredCount})</span>
                       </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                        <span style={{ width: '10px', height: '10px', backgroundColor: '#d97706', borderRadius: '2px' }} />
-                        <span>Flagged ({Object.keys(flaggedQuestions).filter((k) => flaggedQuestions[Number(k)]).length})</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span style={{ width: '12px', height: '12px', backgroundColor: '#d97706', borderRadius: '2px', display: 'inline-block' }} />
+                        <span>Flagged ({Object.values(flaggedQuestions).filter(Boolean).length})</span>
                       </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                        <span style={{ width: '10px', height: '10px', backgroundColor: '#ffffff', border: '1px solid #94a3b8', borderRadius: '2px' }} />
-                        <span>Unanswered ({totalQuestions - answeredCount})</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span style={{ width: '12px', height: '12px', backgroundColor: '#ffffff', border: '1px solid #94a3b8', borderRadius: '2px', display: 'inline-block' }} />
+                        <span>Unanswered / Skipped ({Math.max(0, totalQuestions - answeredCount)})</span>
                       </div>
                     </div>
                   </div>
@@ -1092,21 +1201,134 @@ export const StudentExamsPage: React.FC = () => {
         </Modal>
       )}
 
-      {/* Submit Confirmation Dialog */}
-      <ConfirmDialog
-        isOpen={showSubmitConfirm}
-        onClose={() => setShowSubmitConfirm(false)}
-        onConfirm={handleFinalSubmit}
-        title="Confirm Final Exam Submission"
-        message={`You have answered ${answeredCount} of ${totalQuestions} questions. ${
-          totalQuestions - answeredCount > 0
-            ? `Warning: ${totalQuestions - answeredCount} question(s) remain unanswered.`
-            : 'All questions have been answered.'
-        } Once submitted, you cannot change your answers.`}
-        confirmText="Yes, Submit Examination"
-        cancelText="Return to Questions"
-        variant="danger"
-      />
+      {/* Submit Confirmation & Skipped Question Summary Modal */}
+      {showSubmitConfirm && (
+        <Modal
+          isOpen={showSubmitConfirm}
+          onClose={() => setShowSubmitConfirm(false)}
+          title="Confirm Final Exam Submission"
+          description="ROYAL COLLEGE OF NURSING SWAT • Examination Paper Review"
+          maxWidth="md"
+          footer={
+            <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <Button
+                  variant="outline"
+                  onClick={() => setShowSubmitConfirm(false)}
+                >
+                  Return to Exam
+                </Button>
+                {totalQuestions - answeredCount > 0 && (
+                  <Button
+                    variant="secondary"
+                    onClick={() => {
+                      const firstSkipped = currentExamQuestions.findIndex(
+                        (q, idx) =>
+                          selectedAnswers[idx] === undefined &&
+                          (!q.id || selectedAnswers[q.id] === undefined)
+                      );
+                      if (firstSkipped !== -1) {
+                        setCurrentQuestionIndex(firstSkipped);
+                      }
+                      setShowSubmitConfirm(false);
+                    }}
+                    style={{ backgroundColor: '#fffbeb', color: '#b45309', borderColor: '#fde68a' }}
+                  >
+                    Review Skipped Questions ({totalQuestions - answeredCount})
+                  </Button>
+                )}
+              </div>
+
+              <Button
+                variant="danger"
+                onClick={handleFinalSubmit}
+                style={{ backgroundColor: '#dc2626' }}
+              >
+                Yes, Submit Examination
+              </Button>
+            </div>
+          }
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+            <p style={{ fontSize: '0.9rem', color: 'var(--color-slate-600)', margin: 0, lineHeight: 1.5 }}>
+              Please review your question completion summary below before submitting. Once submitted, your exam will be permanently locked and answers cannot be changed.
+            </p>
+
+            {/* Submission Counts Grid */}
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(3, 1fr)',
+                gap: '0.75rem',
+                textAlign: 'center',
+              }}
+            >
+              <div style={{ padding: '1rem', backgroundColor: 'var(--color-slate-50)', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-slate-200)' }}>
+                <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)', fontWeight: 600 }}>Total Questions</span>
+                <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--color-slate-900)', marginTop: '0.25rem' }}>
+                  {totalQuestions}
+                </div>
+              </div>
+
+              <div style={{ padding: '1rem', backgroundColor: '#ecfdf5', borderRadius: 'var(--radius-md)', border: '1px solid #a7f3d0' }}>
+                <span style={{ fontSize: '0.78rem', color: '#065f46', fontWeight: 600 }}>Answered</span>
+                <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#047857', marginTop: '0.25rem' }}>
+                  {answeredCount}
+                </div>
+              </div>
+
+              <div style={{ padding: '1rem', backgroundColor: totalQuestions - answeredCount > 0 ? '#fffbeb' : '#f8fafc', borderRadius: 'var(--radius-md)', border: `1px solid ${totalQuestions - answeredCount > 0 ? '#fde68a' : 'var(--color-slate-200)'}` }}>
+                <span style={{ fontSize: '0.78rem', color: totalQuestions - answeredCount > 0 ? '#92400e' : 'var(--color-slate-500)', fontWeight: 600 }}>Unanswered / Skipped</span>
+                <div style={{ fontSize: '1.5rem', fontWeight: 800, color: totalQuestions - answeredCount > 0 ? '#d97706' : 'var(--color-slate-600)', marginTop: '0.25rem' }}>
+                  {Math.max(0, totalQuestions - answeredCount)}
+                </div>
+              </div>
+            </div>
+
+            {totalQuestions - answeredCount > 0 ? (
+              <div
+                style={{
+                  backgroundColor: '#fffbeb',
+                  border: '1px solid #fde68a',
+                  borderRadius: 'var(--radius-md)',
+                  padding: '0.85rem 1rem',
+                  fontSize: '0.85rem',
+                  color: '#92400e',
+                  lineHeight: 1.5,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.75rem',
+                }}
+              >
+                <div style={{ fontSize: '1.25rem' }}>⚠️</div>
+                <div>
+                  <strong>Warning:</strong> You have <strong>{totalQuestions - answeredCount} unanswered/skipped</strong> question(s). Unanswered questions will receive zero marks upon submission. You may review them before submitting or proceed to submit now.
+                </div>
+              </div>
+            ) : (
+              <div
+                style={{
+                  backgroundColor: '#ecfdf5',
+                  border: '1px solid #a7f3d0',
+                  borderRadius: 'var(--radius-md)',
+                  padding: '0.85rem 1rem',
+                  fontSize: '0.85rem',
+                  color: '#065f46',
+                  lineHeight: 1.5,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.75rem',
+                }}
+              >
+                <div style={{ fontSize: '1.25rem' }}>✓</div>
+                <div>
+                  All <strong>{totalQuestions} questions</strong> have been answered. You are ready to complete your official examination submission.
+                </div>
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
     </div>
   );
 };

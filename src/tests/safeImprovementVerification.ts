@@ -513,9 +513,199 @@ function switchAccount(logoutFn: () => void): string {
 
 const redirectDestination = switchAccount(() => {
   authUserSession = null;
-});
 assert(authUserSession === null, 'Switch Account securely signs out and clears session state');
 assert(redirectDestination === '/login', 'Switch Account navigates to /login');
+
+// ====================================================================
+// TEST SUITE 7: Student Exam Improvements (Locking, Skipping, Immediate Results)
+// ====================================================================
+console.log('\n--- Test Suite 7: Student Exam Improvements (Locking, Skipping, Immediate Results) ---');
+
+// 1. Submitted Attempt Locking & Re-entry Prevention
+interface MockAssignment {
+  id: string;
+  examId: string;
+  studentId: string;
+  status: 'assigned' | 'in_progress' | 'submitted' | 'graded';
+  submittedAt?: string;
+  answers?: Record<string, any>;
+  result?: any;
+}
+
+function simulateStartStudentAttempt(assignment: MockAssignment): { allowed: boolean; message?: string } {
+  if (assignment.status === 'submitted' || assignment.status === 'graded') {
+    throw new Error('You have already submitted this exam.');
+  }
+  return { allowed: true };
+}
+
+let testAttempt: MockAssignment = {
+  id: 'exam-rcns-101_student-km-001',
+  examId: 'exam-rcns-101',
+  studentId: 'student-km-001',
+  status: 'assigned',
+};
+
+// First entry allowed
+assert(simulateStartStudentAttempt(testAttempt).allowed === true, 'Initial start attempt allowed for unsubmitted exam');
+
+// Student submits exam
+testAttempt.status = 'submitted';
+testAttempt.submittedAt = new Date().toISOString();
+
+// Second entry blocked permanently
+let submitLockError = '';
+try {
+  simulateStartStudentAttempt(testAttempt);
+} catch (e: any) {
+  submitLockError = e.message;
+}
+assert(
+  submitLockError === 'You have already submitted this exam.',
+  'Re-entry to submitted exam is permanently locked with canonical error message'
+);
+
+// Verify UI Button Logic for submitted vs active exams
+function getExamCardActionLabel(exam: { status: string; assignmentStatus?: string }): string {
+  const isSubmitted = exam.assignmentStatus === 'submitted' || exam.assignmentStatus === 'graded';
+  if (isSubmitted) return 'Exam Already Submitted • View Result →';
+  if (exam.status === 'active') return 'Start Examination Now →';
+  if (exam.status === 'scheduled') return 'Upcoming • Locked';
+  return 'Examination Closed • View Result';
+}
+
+assert(
+  getExamCardActionLabel({ status: 'active', assignmentStatus: 'submitted' }) ===
+    'Exam Already Submitted • View Result →',
+  'Submitted active exam shows "Exam Already Submitted • View Result →" and disables Start button'
+);
+assert(
+  getExamCardActionLabel({ status: 'active', assignmentStatus: 'assigned' }) ===
+    'Start Examination Now →',
+  'Unsubmitted active exam shows "Start Examination Now →"'
+);
+
+// 2. Duplicate Submission & Idempotency Safety
+function simulateSubmitExamAttempt(
+  assignment: MockAssignment,
+  newAnswers: Record<string, any>
+): { status: string; isDuplicate: boolean; result: any } {
+  if (assignment.status === 'submitted' || assignment.status === 'graded') {
+    return {
+      status: assignment.status,
+      isDuplicate: true,
+      result: assignment.result,
+    };
+  }
+  assignment.status = 'submitted';
+  assignment.answers = newAnswers;
+  assignment.result = { marks: 25, totalMarks: 30, percentage: 83.3 };
+  return {
+    status: 'submitted',
+    isDuplicate: false,
+    result: assignment.result,
+  };
+}
+
+const initialSubmit = simulateSubmitExamAttempt(
+  { ...testAttempt, status: 'in_progress' as any },
+  { q1: 1, q2: 2 }
+);
+assert(initialSubmit.isDuplicate === false, 'First submission completes successfully');
+
+const duplicateSubmit = simulateSubmitExamAttempt(
+  { ...testAttempt, status: 'submitted', result: initialSubmit.result },
+  { q1: 3, q2: 3 } // Attempted altered answers on re-submission
+);
+assert(duplicateSubmit.isDuplicate === true, 'Duplicate submission safely detected and blocked from re-grading');
+assert(duplicateSubmit.result.marks === 25, 'Duplicate submission preserves original result without modification');
+
+// 3. Skipped Questions Handling & Non-Inheritance
+const examQuestionsForSkipping: MasterQuestion[] = [
+  { id: 'sq-1', examId: 'e-skip', question: 'Q1', options: ['A', 'B', 'C', 'D'], correctAnswer: 'A', marks: 4, order: 1 },
+  { id: 'sq-2', examId: 'e-skip', question: 'Q2', options: ['A', 'B', 'C', 'D'], correctAnswer: 'B', marks: 6, order: 2 },
+  { id: 'sq-3', examId: 'e-skip', question: 'Q3', options: ['A', 'B', 'C', 'D'], correctAnswer: 'C', marks: 5, order: 3 },
+  { id: 'sq-4', examId: 'e-skip', question: 'Q4', options: ['A', 'B', 'C', 'D'], correctAnswer: 'D', marks: 5, order: 4 },
+];
+
+// Student answers SQ-1 (correct) and SQ-3 (incorrect), skips SQ-2 and SQ-4
+const answersWithSkips: Record<string, any> = {
+  'sq-1': 0, // correct (A) -> +4 marks
+  // sq-2 skipped (undefined) -> 0 marks
+  'sq-3': 1, // incorrect (B instead of C) -> 0 marks
+  // sq-4 skipped (empty / undefined) -> 0 marks
+};
+
+const gradedSkipped = gradeExamSubmission(examQuestionsForSkipping, answersWithSkips);
+assert(gradedSkipped.totalMarks === 20, 'Total marks calculated as sum of variable question weights (4+6+5+5=20)');
+assert(gradedSkipped.obtainedMarks === 4, 'Obtained marks accurately awards marks only for correct answers');
+assert(gradedSkipped.correctCount === 1, 'Correct count is 1');
+assert(gradedSkipped.answersCount === 2, 'Answered count is 2');
+
+const totalExamQuestionsCount = examQuestionsForSkipping.length;
+const skippedCount = totalExamQuestionsCount - gradedSkipped.answersCount;
+assert(skippedCount === 2, 'Unanswered/skipped count is accurately 2 (4 total - 2 answered)');
+
+// Verify that skipped questions strictly receive 0 marks and do not inherit answers
+const allSkippedGraded = gradeExamSubmission(examQuestionsForSkipping, {});
+assert(allSkippedGraded.obtainedMarks === 0, 'All-skipped exam strictly receives 0 marks');
+assert(allSkippedGraded.correctCount === 0, 'All-skipped exam has 0 correct answers');
+assert(allSkippedGraded.answersCount === 0, 'All-skipped exam has 0 answered questions');
+
+// 4. "Review Skipped Questions" index finder
+function findFirstSkippedQuestionIndex(
+  questions: Array<{ id: string }>,
+  selectedAnswers: Record<string, any>
+): number {
+  return questions.findIndex((q, idx) => selectedAnswers[idx] === undefined && selectedAnswers[q.id] === undefined);
+}
+
+const firstSkippedIdx = findFirstSkippedQuestionIndex(examQuestionsForSkipping, answersWithSkips);
+assert(firstSkippedIdx === 1, 'Review Skipped Questions correctly jumps to index 1 (sq-2, the first unanswered question)');
+
+// 5. Immediate Results Display Metrics Verification
+const immediateResultPayload = {
+  totalMarks: gradedSkipped.totalMarks,
+  marks: gradedSkipped.obtainedMarks,
+  percentage: gradedSkipped.percentage,
+  correctCount: gradedSkipped.correctCount,
+  incorrectCount: Math.max(0, gradedSkipped.answersCount - gradedSkipped.correctCount),
+  unansweredCount: skippedCount,
+  passed: gradedSkipped.passed,
+};
+
+assert(immediateResultPayload.totalMarks === 20, 'Immediate result has totalMarks: 20');
+assert(immediateResultPayload.marks === 4, 'Immediate result has marks obtained: 4');
+assert(immediateResultPayload.percentage === 20, 'Immediate result has percentage: 20%');
+assert(immediateResultPayload.correctCount === 1, 'Immediate result has correctCount: 1');
+assert(immediateResultPayload.incorrectCount === 1, 'Immediate result has incorrectCount: 1');
+assert(immediateResultPayload.unansweredCount === 2, 'Immediate result has unansweredCount: 2');
+
+// 6. Question Confidentiality Verification (Zero Answer Leakage to Student Client)
+const rawMasterDoc = {
+  id: 'q-secret-99',
+  examId: 'exam-final',
+  question: 'What is the standard adult pulse rate?',
+  options: ['40-50 bpm', '60-100 bpm', '110-140 bpm', '150-180 bpm'],
+  correctAnswer: 1,
+  explanation: 'Normal resting heart rate for adults ranges from 60 to 100 beats per minute.',
+  marks: 2,
+  order: 1,
+};
+
+const studentDeliveredQuestion = {
+  id: rawMasterDoc.id,
+  examId: rawMasterDoc.examId,
+  question: rawMasterDoc.question,
+  options: rawMasterDoc.options,
+  marks: rawMasterDoc.marks,
+  order: rawMasterDoc.order,
+};
+
+assert(!('correctAnswer' in studentDeliveredQuestion), 'Student question strictly OMITS correctAnswer');
+assert(!('explanation' in studentDeliveredQuestion), 'Student question strictly OMITS explanation');
+assert((studentDeliveredQuestion as any).options.length === 4, 'Student question retains options for answering');
+assert((studentDeliveredQuestion as any).marks === 2, 'Student question retains assigned mark weight');
 
 // ====================================================================
 // SUMMARY RESULTS

@@ -50,8 +50,10 @@ export const resultService = {
       for (const assignDoc of assignSnap.docs) {
         const assignData = assignDoc.data();
         if (!finalizedExamIds.has(assignData.examId)) {
+          const isGraded = assignData.resultStatus === 'graded' || assignData.status === 'graded';
+          const percentage = Number(assignData.percentage) || 0;
           finalizedResults.push({
-            id: `pending_${assignData.examId}_${studentId}`,
+            id: `assign_${assignData.examId}_${studentId}`,
             examId: assignData.examId,
             studentId,
             studentName: assignData.studentName || 'Student Candidate',
@@ -62,13 +64,17 @@ export const resultService = {
             program: assignData.program,
             semester: assignData.semester,
             batch: assignData.batch,
-            marks: 0,
+            marks: Number(assignData.marks) || 0,
             totalMarks: Number(assignData.totalMarks) || 100,
-            percentage: 0,
-            passed: false,
+            percentage,
+            passed: assignData.passed !== undefined ? Boolean(assignData.passed) : percentage >= 50,
             answersCount: assignData.answersCount || (assignData.answers ? Object.keys(assignData.answers).length : 0),
+            correctCount: Number(assignData.correctCount) || 0,
+            incorrectCount: Number(assignData.incorrectCount) || 0,
+            unansweredCount: Number(assignData.unansweredCount) || 0,
             submittedAt: assignData.submittedAt || new Date().toISOString(),
-            status: 'pending',
+            status: isGraded ? 'graded' : 'pending',
+            grade: assignData.grade || calculateKmuGrade(percentage),
           });
         }
       }
@@ -117,21 +123,85 @@ export const resultService = {
     semester?: string;
     batch?: string;
     answers: Record<string, string | number>;
+    totalQuestions?: number;
   }): Promise<Result> {
     const resultId = `${params.studentId}_${params.examId}`;
     const resultRef = doc(db, 'results', resultId);
+    const assignmentId = `${params.examId}_${params.studentId}`;
+    const assignRef = doc(db, 'assignments', assignmentId);
 
-    // 1. Idempotency Check: Return existing result if already recorded
+    // 1. Idempotency Check: Prevent duplicate submissions and repeated result creation
     try {
       const existingSnap = await getDoc(resultRef);
       if (existingSnap.exists()) {
+        console.log('[resultService] Authoritative result already exists:', resultId);
         return { id: existingSnap.id, ...existingSnap.data() } as Result;
+      }
+      const assignSnap = await getDoc(assignRef);
+      if (assignSnap.exists()) {
+        const assignData = assignSnap.data();
+        if (assignData.status === 'submitted' || assignData.status === 'graded') {
+          console.warn('[resultService] Duplicate submission prevented: Attempt already marked submitted/graded.');
+          const r = assignData.result || {};
+          return {
+            id: resultId,
+            examId: params.examId,
+            studentId: params.studentId,
+            studentName: assignData.studentName || params.studentName || 'Student Candidate',
+            kmuRegistrationNo: assignData.kmuRegistrationNo || params.kmuRegistrationNo,
+            examTitle: assignData.examTitle || params.examTitle || 'Academic Examination',
+            examType: (assignData.examType || params.examType || 'exam') as any,
+            subject: assignData.subject || params.subject || 'Clinical Assessment',
+            program: assignData.program || params.program,
+            semester: assignData.semester || params.semester,
+            batch: assignData.batch || params.batch,
+            marks: r.marks ?? assignData.marks ?? 0,
+            totalMarks: r.totalMarks ?? assignData.totalMarks ?? 100,
+            percentage: r.percentage ?? assignData.percentage ?? 0,
+            passed: r.passed ?? assignData.passed ?? false,
+            grade: r.grade ?? assignData.grade ?? 'Pass',
+            answersCount: r.answersCount ?? assignData.answersCount ?? 0,
+            correctCount: r.correctCount ?? assignData.correctCount ?? 0,
+            incorrectCount: r.incorrectCount ?? assignData.incorrectCount ?? 0,
+            unansweredCount: r.unansweredCount ?? assignData.unansweredCount ?? 0,
+            status: (r.status ?? assignData.resultStatus ?? assignData.status ?? 'submitted') as any,
+            submittedAt: assignData.submittedAt || new Date().toISOString(),
+          } as Result;
+        }
       }
     } catch (checkErr) {
       console.warn('Idempotency pre-check notice:', checkErr);
     }
 
-    // 2. Cloud Function Attempt (Blaze tier fallback)
+    // Load exam metadata for variable marks and total marks calculation
+    const examDoc = await getDoc(doc(db, 'exams', params.examId)).catch(() => null);
+    const examData = examDoc?.exists() ? examDoc.data() : null;
+
+    let totalQuestions = params.totalQuestions || 0;
+    let totalMarks = 0;
+
+    if (Array.isArray(examData?.sanitizedQuestions) && examData.sanitizedQuestions.length > 0) {
+      if (!totalQuestions) {
+        totalQuestions = examData.sanitizedQuestions.length;
+      }
+      totalMarks = examData.sanitizedQuestions.reduce(
+        (sum: number, q: any) => sum + (Number(q.marks) || 1),
+        0
+      );
+    } else {
+      totalQuestions = totalQuestions || Number(examData?.questionCount) || Object.keys(params.answers || {}).length || 1;
+      totalMarks = Number(examData?.totalMarks) || totalQuestions;
+    }
+
+    // Calculate answered and unanswered/skipped questions
+    const answeredCount = Object.keys(params.answers || {}).filter((k) => {
+      const val = params.answers[k];
+      return val !== undefined && val !== null && String(val).trim() !== '' && val !== -1 && val !== '-1';
+    }).length;
+
+    const unansweredCount = Math.max(0, totalQuestions - answeredCount);
+
+    // 2. Cloud Function Attempt (Blaze tier authoritative server-side grading)
     try {
       const submitFn = httpsCallable<
         { examId: string; answers: Record<string, string | number> },
@@ -145,6 +215,9 @@ export const resultService = {
 
       const data = response.data;
       if (data) {
+        const correctCount = Number(data.correctCount) || 0;
+        const answersCount = data.answersCount || answeredCount;
+        const incorrectCount = Math.max(0, answersCount - correctCount);
         return {
           id: data.resultId || resultId,
           examId: params.examId,
@@ -161,6 +234,10 @@ export const resultService = {
           totalMarks: data.totalMarks,
           percentage: data.percentage,
           passed: data.passed,
+          answersCount,
+          correctCount,
+          incorrectCount,
+          unansweredCount,
           submittedAt: data.submittedAt || new Date().toISOString(),
           status: data.status || 'graded',
         };
@@ -171,22 +248,47 @@ export const resultService = {
       );
     }
 
-    // 3. Spark Free Tier Workflow: Persist submission to student's assignment document
-    const examDoc = await getDoc(doc(db, 'exams', params.examId)).catch(() => null);
-    const examData = examDoc?.exists() ? examDoc.data() : null;
+    // 3. Spark Free Tier Evaluation & Persistence
+    let gradedResult: ReturnType<typeof gradeExamSubmission> | null = null;
+    try {
+      const questionsCol = collection(db, 'questions');
+      const qQuery = query(questionsCol, where('examId', '==', params.examId));
+      const questionsSnap = await getDocs(qQuery);
+      if (!questionsSnap.empty) {
+        const masterQuestions = questionsSnap.docs.map(
+          (d) => ({ id: d.id, ...d.data() } as MasterQuestion)
+        );
+        masterQuestions.sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0));
+        gradedResult = gradeExamSubmission(masterQuestions, params.answers, examData?.passingMarks);
+      }
+    } catch {
+      // Expected zero-trust restriction for student clients on Spark tier
+    }
 
-    const totalMarks = Number(examData?.totalMarks) || 100;
+    const marks = gradedResult ? gradedResult.obtainedMarks : 0;
+    const percentage = gradedResult ? gradedResult.percentage : 0;
+    const passed = gradedResult ? gradedResult.passed : false;
+    const correctCount = gradedResult ? gradedResult.correctCount : 0;
+    const incorrectCount = gradedResult ? Math.max(0, answeredCount - gradedResult.correctCount) : 0;
+    const grade = gradedResult ? gradedResult.grade : calculateKmuGrade(percentage);
+    const resultStatus = gradedResult ? 'graded' : 'pending';
 
-    // Filter valid answers count
-    const answeredCount = Object.keys(params.answers || {}).filter((k) => {
-      const val = params.answers[k];
-      return val !== undefined && val !== null && String(val).trim() !== '' && val !== -1 && val !== '-1';
-    }).length;
+    const assignResultData = {
+      marks,
+      totalMarks,
+      percentage,
+      passed,
+      correctCount,
+      incorrectCount,
+      unansweredCount,
+      answersCount: answeredCount,
+      totalQuestions,
+      grade,
+      status: resultStatus,
+    };
 
     // Persist submission record onto assignment document (Student is authorized under Firestore rules)
-    const assignmentId = `${params.examId}_${params.studentId}`;
     try {
-      const assignRef = doc(db, 'assignments', assignmentId);
       await setDoc(
         assignRef,
         {
@@ -205,7 +307,17 @@ export const resultService = {
           submittedAt: serverTimestamp(),
           answers: params.answers,
           answersCount: answeredCount,
+          unansweredCount,
+          totalQuestions,
           totalMarks,
+          marks,
+          percentage,
+          passed,
+          correctCount,
+          incorrectCount,
+          grade,
+          resultStatus,
+          result: assignResultData,
         },
         { merge: true }
       );
@@ -213,8 +325,7 @@ export const resultService = {
       console.warn('Assignment submission record note:', assignErr);
     }
 
-    // Return safe pending-result object without exposing provisional 0s as authoritative
-    const pendingResultData: Result = {
+    const finalResultData: Result = {
       id: resultId,
       examId: params.examId,
       studentId: params.studentId,
@@ -226,17 +337,20 @@ export const resultService = {
       program: params.program || examData?.program,
       semester: params.semester || examData?.semester,
       batch: params.batch || examData?.batch,
-      marks: 0,
+      marks,
       totalMarks,
-      percentage: 0,
-      passed: false,
+      percentage,
+      passed,
       answersCount: answeredCount,
-      correctCount: 0,
+      correctCount,
+      incorrectCount,
+      unansweredCount,
+      grade,
       submittedAt: new Date().toISOString() as any,
-      status: 'pending',
+      status: resultStatus,
     };
 
-    return pendingResultData;
+    return finalResultData;
   },
 
   /**
@@ -285,6 +399,10 @@ export const resultService = {
     const resultId = `${studentId}_${examId}`;
     const resultRef = doc(db, 'results', resultId);
 
+    const totalQuestions = masterQuestions.length;
+    const unansweredCount = Math.max(0, totalQuestions - graded.answersCount);
+    const incorrectCount = Math.max(0, graded.answersCount - graded.correctCount);
+
     const resultRecord: Result = {
       id: resultId,
       examId,
@@ -304,6 +422,8 @@ export const resultService = {
       grade: calculateKmuGrade(graded.percentage),
       answersCount: graded.answersCount,
       correctCount: graded.correctCount,
+      incorrectCount,
+      unansweredCount,
       submittedAt: assignData.submittedAt || serverTimestamp(),
       status: 'graded',
     };
