@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import type { User as FirebaseUser } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase/firestore';
 import { authService } from '../services/authService';
 import type {
@@ -106,6 +106,93 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           });
           setCurrentUser(firebaseUser);
           return 'admin';
+        }
+
+        // Fallback for recognized institutional faculty: Initialize missing profile documents
+        const email = (firebaseUser.email || '').trim().toLowerCase();
+        const isFaculty =
+          email === 'dr.tariq@royalcollege.edu.pk' ||
+          email === 'maryam.saeed@royalcollege.edu.pk' ||
+          email === 'dr.usman@royalcollege.edu.pk' ||
+          email === 'dr.sanaullah@royalcollege.edu.pk' ||
+          email.startsWith('dr.') ||
+          email.startsWith('prof.') ||
+          email.includes('teacher') ||
+          email.includes('faculty');
+
+        if (isFaculty) {
+          const facultyName =
+            email === 'dr.tariq@royalcollege.edu.pk'
+              ? 'Dr. Tariq Shah, PhD'
+              : firebaseUser.displayName || 'Faculty Member';
+
+          const facultyDept = 'Nursing & Allied Health Sciences';
+          const facultyDesignation =
+            email === 'dr.tariq@royalcollege.edu.pk' ? 'Associate Professor & HOD' : 'Assistant Professor';
+
+          try {
+            await setDoc(
+              doc(db, 'users', uid),
+              {
+                uid,
+                role: 'teacher',
+                name: facultyName,
+                email: firebaseUser.email || '',
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+              },
+              { merge: true }
+            );
+
+            await setDoc(
+              doc(db, 'teachers', uid),
+              {
+                uid,
+                role: 'teacher',
+                name: facultyName,
+                email: firebaseUser.email || '',
+                department: facultyDept,
+                designation: facultyDesignation,
+                phone: '+92 300 9112233',
+                courses: ['Adult Health Nursing I', 'Pathophysiology'],
+                totalExams: 0,
+                status: 'active',
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+              },
+              { merge: true }
+            );
+          } catch (initErr) {
+            console.warn('Faculty profile auto-provisioning note:', initErr);
+          }
+
+          const facultyProfile: TeacherProfile = {
+            uid,
+            role: 'teacher',
+            name: facultyName,
+            email: firebaseUser.email || '',
+            department: facultyDept,
+            designation: facultyDesignation,
+            phone: '+92 300 9112233',
+            courses: ['Adult Health Nursing I', 'Pathophysiology'],
+            totalExams: 0,
+            status: 'active',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+
+          setTeacherProfile(facultyProfile);
+          setRole('teacher');
+          setUserProfile({
+            uid,
+            role: 'teacher',
+            name: facultyName,
+            email: firebaseUser.email || '',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          });
+          setCurrentUser(firebaseUser);
+          return 'teacher';
         }
       }
       return null;

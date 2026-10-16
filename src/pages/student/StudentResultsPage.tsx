@@ -388,6 +388,73 @@ export const StudentResultsPage: React.FC = () => {
               </div>
             )}
 
+            {/* Component Marks Breakdown (MCQs, Short Questions, Long Questions) */}
+            {selectedResult.status !== 'pending' && (selectedResult.writtenMarks !== undefined || selectedResult.shortQuestionsMarks !== undefined || selectedResult.longQuestionsMarks !== undefined) && (
+              <div
+                style={{
+                  backgroundColor: '#ffffff',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid var(--color-slate-200)',
+                  overflow: 'hidden',
+                }}
+              >
+                <div
+                  style={{
+                    backgroundColor: 'var(--color-slate-50)',
+                    padding: '0.75rem 1rem',
+                    borderBottom: '1px solid var(--color-slate-200)',
+                    fontWeight: 700,
+                    fontSize: '0.85rem',
+                    color: 'var(--color-slate-700)',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                  }}
+                >
+                  <span>KMU Examination Score Breakdown</span>
+                  <Badge variant="outline">Official Transcript</Badge>
+                </div>
+                <div style={{ padding: '0.5rem 1rem' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+                    <tbody>
+                      <tr style={{ borderBottom: '1px solid var(--color-slate-100)' }}>
+                        <td style={{ padding: '0.6rem 0', color: 'var(--color-slate-600)' }}>
+                          <strong>Section A:</strong> Multiple Choice Questions (MCQs)
+                        </td>
+                        <td style={{ padding: '0.6rem 0', textAlign: 'right', fontWeight: 700, color: 'var(--color-slate-800)' }}>
+                          {selectedResult.mcqMarks ?? 0} <span style={{ color: 'var(--color-slate-400)', fontWeight: 400 }}>/ {selectedResult.mcqTotalMarks ?? '—'}</span>
+                        </td>
+                      </tr>
+                      <tr style={{ borderBottom: '1px solid var(--color-slate-100)' }}>
+                        <td style={{ padding: '0.6rem 0', color: 'var(--color-slate-600)' }}>
+                          <strong>Section B:</strong> Short Questions (SAQs)
+                        </td>
+                        <td style={{ padding: '0.6rem 0', textAlign: 'right', fontWeight: 700, color: 'var(--color-slate-800)' }}>
+                          {selectedResult.shortQuestionsMarks ?? 0} <span style={{ color: 'var(--color-slate-400)', fontWeight: 400 }}>/ {selectedResult.shortQuestionsTotalMarks ?? '—'}</span>
+                        </td>
+                      </tr>
+                      <tr style={{ borderBottom: '1px solid var(--color-slate-100)' }}>
+                        <td style={{ padding: '0.6rem 0', color: 'var(--color-slate-600)' }}>
+                          <strong>Section C:</strong> Long Questions (LAQs)
+                        </td>
+                        <td style={{ padding: '0.6rem 0', textAlign: 'right', fontWeight: 700, color: 'var(--color-slate-800)' }}>
+                          {selectedResult.longQuestionsMarks ?? 0} <span style={{ color: 'var(--color-slate-400)', fontWeight: 400 }}>/ {selectedResult.longQuestionsTotalMarks ?? '—'}</span>
+                        </td>
+                      </tr>
+                      <tr style={{ backgroundColor: 'var(--color-primary-50)' }}>
+                        <td style={{ padding: '0.75rem 0.5rem', fontWeight: 800, color: 'var(--color-primary-900)' }}>
+                          Total Aggregate Score
+                        </td>
+                        <td style={{ padding: '0.75rem 0.5rem', textAlign: 'right', fontWeight: 800, color: 'var(--color-primary-900)', fontSize: '1rem' }}>
+                          {selectedResult.marks} <span style={{ color: 'var(--color-slate-500)', fontWeight: 500 }}>/ {selectedResult.totalMarks}</span>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
             <div style={{ fontSize: '0.8rem', color: 'var(--color-slate-500)', fontStyle: 'italic', borderTop: '1px solid var(--color-slate-100)', paddingTop: '0.75rem' }}>
               Note: This is an electronic transcript. Any alteration, forgery, or tampering renders this result document null and void.
             </div>

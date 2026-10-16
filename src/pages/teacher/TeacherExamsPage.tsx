@@ -31,6 +31,8 @@ import { questionService } from '../../services/questionService';
 import { assignmentService } from '../../services/assignmentService';
 import { resultService } from '../../services/resultService';
 import { BulkMcqImportModal } from '../../components/teacher/BulkMcqImportModal';
+import { WrittenQuestionManagerModal } from '../../components/teacher/WrittenQuestionManagerModal';
+import { WrittenAnswerEvaluationModal } from '../../components/teacher/WrittenAnswerEvaluationModal';
 import {
   formatPakistanDateTime,
   toDatetimeLocalPktString,
@@ -54,7 +56,7 @@ export const TeacherExamsPage: React.FC = () => {
   const fetchTeacherExams = async () => {
     try {
       if (currentUser) {
-        const fetched = await examService.getExamsByTeacher(currentUser.uid);
+        const fetched = await examService.getExamsByTeacher(currentUser.uid, currentUser.email || undefined);
         // Annotate with dynamic effective status
         const withStatus = fetched.map((e) => ({
           ...e,
@@ -124,6 +126,10 @@ export const TeacherExamsPage: React.FC = () => {
   // Bulk MCQ Import Modal State
   const [isBulkImportModalOpen, setIsBulkImportModalOpen] = useState(false);
   const [bulkImportTargetExam, setBulkImportTargetExam] = useState<Exam | null>(null);
+
+  // Written Questions Management & Evaluation State
+  const [selectedExamForWritten, setSelectedExamForWritten] = useState<Exam | null>(null);
+  const [selectedSubmissionForEvaluation, setSelectedSubmissionForEvaluation] = useState<any | null>(null);
 
   // Submissions & Grading Modal State
   const [selectedExamForGrading, setSelectedExamForGrading] = useState<Exam | null>(null);
@@ -706,9 +712,19 @@ export const TeacherExamsPage: React.FC = () => {
                           size="sm"
                           onClick={() => handleOpenQuestionManager(exam)}
                           style={{ backgroundColor: '#0f2744' }}
-                          title="Manage Questions"
+                          title="Manage MCQs"
                         >
-                          Questions ({exam.questionCount || 0})
+                          MCQs ({exam.questionCount || 0})
+                        </Button>
+
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          onClick={() => setSelectedExamForWritten(exam)}
+                          style={{ backgroundColor: '#047857', borderColor: '#047857' }}
+                          title="Manage Short & Long Questions"
+                        >
+                          Written Qs ({exam.writtenQuestionCount || (exam.sanitizedWrittenQuestions ? exam.sanitizedWrittenQuestions.length : 0)})
                         </Button>
 
                         <Button
@@ -1484,6 +1500,7 @@ export const TeacherExamsPage: React.FC = () => {
                       <TableHead>Percentage</TableHead>
                       <TableHead>Grade</TableHead>
                       <TableHead>Status</TableHead>
+                      <TableHead>Action</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -1508,6 +1525,11 @@ export const TeacherExamsPage: React.FC = () => {
                             answersCount: s.answersCount,
                           })),
                       ];
+
+                      const hasWritten = Boolean(
+                        selectedExamForGrading?.sanitizedWrittenQuestions &&
+                        selectedExamForGrading.sanitizedWrittenQuestions.length > 0
+                      );
 
                       return combinedRows.map((item) => (
                         <TableRow key={item.id}>
@@ -1542,6 +1564,27 @@ export const TeacherExamsPage: React.FC = () => {
                               <Badge variant="success">PASSED</Badge>
                             ) : (
                               <Badge variant="danger">FAILED</Badge>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            {hasWritten ? (
+                              <Button
+                                variant="primary"
+                                size="sm"
+                                onClick={() => {
+                                  const fullSub = examSubmissions.find((s) => s.studentId === item.studentId) || item;
+                                  setSelectedSubmissionForEvaluation(fullSub);
+                                }}
+                                style={{
+                                  backgroundColor: item.status === 'graded' ? '#047857' : '#d97706',
+                                  borderColor: item.status === 'graded' ? '#047857' : '#d97706',
+                                  fontSize: '0.78rem',
+                                }}
+                              >
+                                {item.status === 'graded' ? 'Review / Re-grade' : '✍️ Grade Written'}
+                              </Button>
+                            ) : (
+                              <span style={{ fontSize: '0.8rem', color: 'var(--color-slate-400)' }}>MCQ Auto</span>
                             )}
                           </TableCell>
                         </TableRow>
@@ -1590,6 +1633,32 @@ export const TeacherExamsPage: React.FC = () => {
           handleOpenQuestionManager(targetExam);
         }}
       />
+
+      {/* Written Question Manager Modal */}
+      {selectedExamForWritten && (
+        <WrittenQuestionManagerModal
+          isOpen={Boolean(selectedExamForWritten)}
+          onClose={() => setSelectedExamForWritten(null)}
+          exam={selectedExamForWritten}
+          onQuestionsUpdated={fetchTeacherExams}
+        />
+      )}
+
+      {/* Written Answer Evaluation & Grading Modal */}
+      {selectedSubmissionForEvaluation && selectedExamForGrading && (
+        <WrittenAnswerEvaluationModal
+          isOpen={Boolean(selectedSubmissionForEvaluation)}
+          onClose={() => setSelectedSubmissionForEvaluation(null)}
+          exam={selectedExamForGrading}
+          submission={selectedSubmissionForEvaluation}
+          onEvaluationFinalized={() => {
+            if (selectedExamForGrading) {
+              handleOpenGradingModal(selectedExamForGrading);
+            }
+            fetchTeacherExams();
+          }}
+        />
+      )}
     </div>
   );
 };

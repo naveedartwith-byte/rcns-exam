@@ -139,10 +139,24 @@ export const assignmentService = {
         q = query(studentsCol, where('semester', '==', cleanSemester));
       }
       snapshot = await getDocs(q);
-    } catch (queryErr) {
+    } catch (queryErr: any) {
+      if (queryErr?.code === 'permission-denied') {
+        throw new Error(
+          'Missing or insufficient permissions: Access to student roster requires an authenticated faculty account.'
+        );
+      }
       // Fallback: load students collection to filter in-memory if composite query index is absent
       console.warn('Cohort student query fallback triggered:', queryErr);
-      snapshot = await getDocs(studentsCol);
+      try {
+        snapshot = await getDocs(studentsCol);
+      } catch (listErr: any) {
+        if (listErr?.code === 'permission-denied') {
+          throw new Error(
+            'Missing or insufficient permissions: Access to student roster requires an authenticated faculty account.'
+          );
+        }
+        throw listErr;
+      }
     }
 
     const matchingStudents: Array<Record<string, any> & { docId: string }> = snapshot.docs
@@ -200,7 +214,16 @@ export const assignmentService = {
       );
     }
 
-    await batchWriter.commit();
+    try {
+      await batchWriter.commit();
+    } catch (batchErr: any) {
+      if (batchErr?.code === 'permission-denied') {
+        throw new Error(
+          'Missing or insufficient permissions: Assignment authorization failed. Only faculty and administrators can assign exams.'
+        );
+      }
+      throw batchErr;
+    }
 
     return {
       assignedCount: matchingStudents.length,

@@ -7,3 +7,4 @@ export * from './exam';
 export * from './question';
 export * from './assignment';
 export * from './result';
+export * from './writtenQuestion';

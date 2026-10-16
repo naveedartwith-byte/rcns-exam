@@ -16,8 +16,11 @@ import { useAuth } from '../../hooks/useAuth';
 import { assignmentService } from '../../services/assignmentService';
 import { questionService } from '../../services/questionService';
 import { resultService } from '../../services/resultService';
+import { writtenQuestionService } from '../../services/writtenQuestionService';
+import { WrittenQuestionsSection } from '../../components/student/WrittenQuestionsSection';
 import type { Exam } from '../../types/exam';
 import type { Question } from '../../types/question';
+import type { StudentWrittenQuestion, StudentWrittenAnswer } from '../../types/writtenQuestion';
 import { formatPakistanDateTime } from '../../utils/dateTime';
 import { checkStudentExamEligibility } from '../../utils/examEligibility';
 
@@ -32,6 +35,9 @@ export const StudentExamsPage: React.FC = () => {
   // Exam Attempt State (Interactive Testing Screen)
   const [takingExam, setTakingExam] = useState<Exam | null>(null);
   const [examQuestions, setExamQuestions] = useState<Omit<Question, 'correctAnswer' | 'explanation'>[]>([]);
+  const [writtenQuestions, setWrittenQuestions] = useState<StudentWrittenQuestion[]>([]);
+  const [writtenAnswers, setWrittenAnswers] = useState<Record<string, StudentWrittenAnswer>>({});
+  const [activeExamSection, setActiveExamSection] = useState<'mcq' | 'written'>('mcq');
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [selectedAnswers, setSelectedAnswers] = useState<Record<string | number, number>>({});
   const [flaggedQuestions, setFlaggedQuestions] = useState<Record<number, boolean>>({});
@@ -149,6 +155,8 @@ export const StudentExamsPage: React.FC = () => {
     setCurrentQuestionIndex(0);
     setSelectedAnswers({});
     setFlaggedQuestions({});
+    setWrittenAnswers({});
+    setActiveExamSection('mcq');
     setTimeLeftSeconds(exam.duration * 60);
     setExamSubmitted(false);
     setExamScoreSummary(null);
@@ -156,9 +164,13 @@ export const StudentExamsPage: React.FC = () => {
     setExamQuestionsError(null);
 
     try {
-      const questions = await questionService.getStudentQuestions(exam.id);
+      const [questions, wQuestions] = await Promise.all([
+        questionService.getStudentQuestions(exam.id),
+        writtenQuestionService.getStudentWrittenQuestions(exam.id),
+      ]);
       setExamQuestions(questions);
-      if (questions.length === 0) {
+      setWrittenQuestions(wQuestions);
+      if (questions.length === 0 && wQuestions.length === 0) {
         setExamQuestionsError('No examination questions were found for this paper. Please contact your course instructor.');
       }
     } catch (err: any) {
@@ -230,6 +242,25 @@ export const StudentExamsPage: React.FC = () => {
     });
   };
 
+  const handleWrittenAnswerChange = (
+    questionId: string,
+    qType: 'short' | 'long',
+    questionText: string,
+    text: string
+  ) => {
+    setWrittenAnswers((prev) => ({
+      ...prev,
+      [questionId]: {
+        questionId,
+        type: qType,
+        questionText,
+        answerText: text,
+        wordCount: text.trim() ? text.trim().split(/\s+/).length : 0,
+        submittedAt: new Date().toISOString(),
+      },
+    }));
+  };
+
   const handleFinalSubmit = async () => {
     setShowSubmitConfirm(false);
     if (!takingExam || !currentUser) return;
@@ -238,6 +269,10 @@ export const StudentExamsPage: React.FC = () => {
       // Calculate answered questions count
       const answeredCount = examQuestions.filter(
         (q, idx) => selectedAnswers[idx] !== undefined || (q.id && selectedAnswers[q.id] !== undefined)
+      ).length;
+
+      const writtenAnsweredCount = Object.values(writtenAnswers).filter(
+        (a) => a.answerText && a.answerText.trim().length > 0
       ).length;
 
       const result = await resultService.submitExamAttempt({
@@ -252,7 +287,10 @@ export const StudentExamsPage: React.FC = () => {
         semester: studentProfile?.semester || takingExam.semester,
         batch: studentProfile?.batch || '',
         answers: selectedAnswers,
+        writtenAnswers,
       });
+
+      const hasWritten = writtenQuestions.length > 0 || Boolean(result.requiresWrittenGrading);
 
       setExamSubmitted(true);
       setExamScoreSummary({
@@ -260,9 +298,9 @@ export const StudentExamsPage: React.FC = () => {
         total: result.totalMarks,
         percentage: result.percentage,
         passed: result.passed ?? result.percentage >= 50,
-        status: result.status || 'pending',
-        answersCount: result.answersCount || answeredCount,
-        totalQuestions: examQuestions.length,
+        status: hasWritten ? 'pending' : (result.status || 'pending'),
+        answersCount: (result.answersCount || answeredCount) + writtenAnsweredCount,
+        totalQuestions: examQuestions.length + writtenQuestions.length,
       });
 
       // Update local exam status to completed
@@ -722,14 +760,86 @@ export const StudentExamsPage: React.FC = () => {
                 />
               </div>
 
-              {/* Question Screen Two-Column: Question Body (left) + Question Palette (right) */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 240px', gap: '1.5rem' }}>
-                {/* Left: Active Question */}
-                {currentQuestion && (
-                  <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '1.5rem' }}>
-                    <div>
-                      {/* Question Top Metadata */}
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+              {/* Section Switcher (Only visible if exam has written questions) */}
+              {writtenQuestions.length > 0 && (
+                <div style={{ display: 'flex', gap: '0.5rem', backgroundColor: 'var(--color-slate-100)', padding: '0.35rem', borderRadius: 'var(--radius-md)' }}>
+                  <button
+                    type="button"
+                    onClick={() => setActiveExamSection('mcq')}
+                    style={{
+                      flex: 1,
+                      padding: '0.6rem 1rem',
+                      borderRadius: 'var(--radius-sm)',
+                      border: 'none',
+                      backgroundColor: activeExamSection === 'mcq' ? '#ffffff' : 'transparent',
+                      fontWeight: activeExamSection === 'mcq' ? 800 : 600,
+                      color: activeExamSection === 'mcq' ? '#0f2744' : 'var(--color-slate-600)',
+                      boxShadow: activeExamSection === 'mcq' ? 'var(--shadow-xs)' : 'none',
+                      cursor: 'pointer',
+                      fontSize: '0.9rem',
+                    }}
+                  >
+                    📝 Section A: MCQs ({examQuestions.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveExamSection('written')}
+                    style={{
+                      flex: 1,
+                      padding: '0.6rem 1rem',
+                      borderRadius: 'var(--radius-sm)',
+                      border: 'none',
+                      backgroundColor: activeExamSection === 'written' ? '#ffffff' : 'transparent',
+                      fontWeight: activeExamSection === 'written' ? 800 : 600,
+                      color: activeExamSection === 'written' ? '#0f2744' : 'var(--color-slate-600)',
+                      boxShadow: activeExamSection === 'written' ? 'var(--shadow-xs)' : 'none',
+                      cursor: 'pointer',
+                      fontSize: '0.9rem',
+                    }}
+                  >
+                    ✍️ Section B &amp; C: Written Questions ({writtenQuestions.length})
+                  </button>
+                </div>
+              )}
+
+              {/* Active Section Body */}
+              {activeExamSection === 'written' && writtenQuestions.length > 0 ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                  <WrittenQuestionsSection
+                    questions={writtenQuestions}
+                    writtenAnswers={writtenAnswers}
+                    onAnswerChange={handleWrittenAnswerChange}
+                  />
+
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      padding: '1rem',
+                      backgroundColor: 'var(--color-slate-50)',
+                      borderRadius: 'var(--radius-md)',
+                      border: '1px solid var(--color-slate-200)',
+                      marginTop: '0.5rem',
+                    }}
+                  >
+                    <Button variant="outline" size="sm" onClick={() => setActiveExamSection('mcq')}>
+                      ← Back to MCQs Section
+                    </Button>
+                    <Button variant="danger" size="md" onClick={() => setShowSubmitConfirm(true)}>
+                      Finish &amp; Submit Entire Exam
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                /* Question Screen Two-Column: Question Body (left) + Question Palette (right) */
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 240px', gap: '1.5rem' }}>
+                  {/* Left: Active Question */}
+                  {currentQuestion && (
+                    <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '1.5rem' }}>
+                      <div>
+                        {/* Question Top Metadata */}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
                         <Badge variant="primary">Question {currentQuestionIndex + 1}</Badge>
                         <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--color-slate-600)' }}>
                           Marks: {currentQuestion.marks}
@@ -949,6 +1059,7 @@ export const StudentExamsPage: React.FC = () => {
                   </div>
                 </div>
               </div>
+            )}
             </div>
           )}
         </Modal>
@@ -960,11 +1071,17 @@ export const StudentExamsPage: React.FC = () => {
         onClose={() => setShowSubmitConfirm(false)}
         onConfirm={handleFinalSubmit}
         title="Confirm Final Exam Submission"
-        message={`You have answered ${answeredCount} of ${totalQuestions} questions. ${
-          totalQuestions - answeredCount > 0
-            ? `Warning: ${totalQuestions - answeredCount} question(s) remain unanswered.`
-            : 'All questions have been answered.'
-        } Once submitted, you cannot change your answers.`}
+        message={
+          writtenQuestions.length > 0
+            ? `You have answered ${answeredCount} of ${totalQuestions} MCQs and ${
+                Object.values(writtenAnswers).filter((a) => a.answerText && a.answerText.trim().length > 0).length
+              } of ${writtenQuestions.length} Written Questions. Once submitted, your answers will be locked.`
+            : `You have answered ${answeredCount} of ${totalQuestions} questions. ${
+                totalQuestions - answeredCount > 0
+                  ? `Warning: ${totalQuestions - answeredCount} question(s) remain unanswered.`
+                  : 'All questions have been answered.'
+              } Once submitted, you cannot change your answers.`
+        }
         confirmText="Yes, Submit Examination"
         cancelText="Return to Questions"
         variant="danger"

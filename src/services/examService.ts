@@ -37,12 +37,29 @@ export const examService = {
 
   /**
    * Retrieves exams created by a specific teacher.
+   * If Dr. Tariq or demo faculty, also safely includes initial seeded exams authored by 'teacher-1'.
    */
-  async getExamsByTeacher(teacherId: string): Promise<Exam[]> {
+  async getExamsByTeacher(teacherId: string, email?: string): Promise<Exam[]> {
     const examsCol = collection(db, 'exams');
     const q = query(examsCol, where('teacherId', '==', teacherId));
     const snapshot = await getDocs(q);
-    return snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Exam));
+    const exams = snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Exam));
+
+    if (email === 'dr.tariq@royalcollege.edu.pk' || teacherId === 'teacher-1') {
+      if (teacherId !== 'teacher-1') {
+        try {
+          const qSeeded = query(examsCol, where('teacherId', '==', 'teacher-1'));
+          const seededSnap = await getDocs(qSeeded);
+          const seededExams = seededSnap.docs
+            .map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Exam))
+            .filter((se) => !exams.some((e) => e.id === se.id));
+          return [...exams, ...seededExams];
+        } catch (seededErr) {
+          console.warn('Seeded exams retrieval note:', seededErr);
+        }
+      }
+    }
+    return exams;
   },
 
 
