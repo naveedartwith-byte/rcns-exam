@@ -22,6 +22,22 @@ import {
 
 export { checkAnswerMatch };
 
+function sortResultsNewestFirst(results: Result[]): Result[] {
+  return results.sort((a, b) => {
+    const parseTime = (val: any) => {
+      if (!val) return 0;
+      if (typeof val === 'number') return val;
+      if (typeof val?.toMillis === 'function') return val.toMillis();
+      if (typeof val?.toDate === 'function') return val.toDate().getTime();
+      const d = new Date(val).getTime();
+      return isNaN(d) ? 0 : d;
+    };
+    const timeA = parseTime(a.submittedAt || a.evaluatedAt || (a as any).createdAt);
+    const timeB = parseTime(b.submittedAt || b.evaluatedAt || (b as any).createdAt);
+    return timeB - timeA;
+  });
+}
+
 export const resultService = {
   /**
    * Retrieves results for a specific student.
@@ -76,27 +92,30 @@ export const resultService = {
       console.warn('Could not check pending assignment submissions:', assignErr);
     }
 
-    return finalizedResults;
+    // Sort results newest first (submittedAt / gradedAt descending) - Requirement #9
+    return sortResultsNewestFirst(finalizedResults);
   },
 
   /**
-   * Retrieves results for a specific exam.
+   * Retrieves results for a specific exam, sorted newest first.
    */
   async getResultsByExamId(examId: string): Promise<Result[]> {
     if (!examId) return [];
     const resultsCol = collection(db, 'results');
     const q = query(resultsCol, where('examId', '==', examId));
     const snapshot = await getDocs(q);
-    return snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Result));
+    const results = snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Result));
+    return sortResultsNewestFirst(results);
   },
 
   /**
-   * Retrieves all results across the institution (Admin view).
+   * Retrieves all results across the institution (Admin view), sorted newest first.
    */
   async getAllResults(): Promise<Result[]> {
     const resultsCol = collection(db, 'results');
     const snapshot = await getDocs(resultsCol);
-    return snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Result));
+    const results = snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Result));
+    return sortResultsNewestFirst(results);
   },
 
   /**
@@ -126,78 +145,68 @@ export const resultService = {
     try {
       const existingSnap = await getDoc(resultRef);
       if (existingSnap.exists()) {
-        return { id: existingSnap.id, ...existingSnap.data() } as Result;
+        const data = existingSnap.data()!;
+        return { id: existingSnap.id, ...data } as Result;
       }
     } catch (checkErr) {
       console.warn('Idempotency pre-check notice:', checkErr);
     }
 
-    // 2. Cloud Function Attempt (Blaze tier fallback)
-    try {
-      const submitFn = httpsCallable<
-        { examId: string; answers: Record<string, string | number>; writtenAnswers?: Record<string, any> },
-        any
-      >(functions, 'submitExamAttempt');
-
-      const response = await submitFn({
-        examId: params.examId,
-        answers: params.answers,
-        writtenAnswers: params.writtenAnswers,
-      });
-
-      const data = response.data;
-      if (data) {
-        return {
-          id: data.resultId || resultId,
-          examId: params.examId,
-          studentId: params.studentId,
-          studentName: data.studentName || params.studentName || 'Student Candidate',
-          kmuRegistrationNo: data.kmuRegistrationNo || params.kmuRegistrationNo,
-          examTitle: params.examTitle || 'Academic Examination',
-          examType: (params.examType as any) || 'exam',
-          subject: params.subject || 'Clinical Assessment',
-          program: params.program,
-          semester: params.semester,
-          batch: params.batch,
-          marks: data.marks,
-          totalMarks: data.totalMarks,
-          percentage: data.percentage,
-          passed: data.passed,
-          submittedAt: data.submittedAt || new Date().toISOString(),
-          status: data.status || 'graded',
-        };
+    // Clean answers to remove any undefined or empty values so Firestore never rejects
+    const cleanAnswers: Record<string, any> = {};
+    if (params.answers && typeof params.answers === 'object') {
+      for (const [k, v] of Object.entries(params.answers)) {
+        if (v !== undefined && v !== null && String(v).trim() !== '' && v !== -1 && v !== '-1') {
+          cleanAnswers[k] = v;
+        }
       }
-    } catch (fnErr: any) {
-      console.warn(
-        `[resultService] Cloud Function unavailable (${fnErr?.code || fnErr?.message}). Proceeding with Spark tier direct submission.`
-      );
     }
 
-    // 3. Spark Free Tier Workflow: Persist submission to student's assignment document
+    const cleanWrittenAnswers: Record<string, any> = {};
+    if (params.writtenAnswers && typeof params.writtenAnswers === 'object') {
+      for (const [k, v] of Object.entries(params.writtenAnswers)) {
+        if (valHasText(v)) {
+          cleanWrittenAnswers[k] = {
+            questionId: String((v as any).questionId || k),
+            type: (v as any).type || 'short',
+            questionText: String((v as any).questionText || ''),
+            answerText: String((v as any).answerText || '').trim(),
+            wordCount: Number((v as any).wordCount) || 0,
+            submittedAt: (v as any).submittedAt || new Date().toISOString(),
+          };
+        }
+      }
+    }
+
+    function valHasText(v: any): boolean {
+      if (!v || typeof v !== 'object') return false;
+      return typeof v.answerText === 'string' && v.answerText.trim().length > 0;
+    }
+
     const examDoc = await getDoc(doc(db, 'exams', params.examId)).catch(() => null);
     const examData = examDoc?.exists() ? examDoc.data() : null;
 
     const totalMarks = Number(examData?.totalMarks) || 100;
+    const sanitizedWrittenQs = examData?.sanitizedWrittenQuestions || [];
     const hasWrittenSection = Boolean(
-      examData?.sanitizedWrittenQuestions &&
-      Array.isArray(examData.sanitizedWrittenQuestions) &&
-      examData.sanitizedWrittenQuestions.length > 0
+      (Array.isArray(sanitizedWrittenQs) && sanitizedWrittenQs.length > 0) ||
+      Object.keys(cleanWrittenAnswers).length > 0
     );
 
-    // Filter valid answers count
-    const answeredCount = Object.keys(params.answers || {}).filter((k) => {
-      const val = params.answers[k];
-      return val !== undefined && val !== null && String(val).trim() !== '' && val !== -1 && val !== '-1';
-    }).length;
+    // Accurate answeredCount: Count unique question entries without double-counting index + ID keys
+    let answeredCount = 0;
+    if (examData?.sanitizedQuestions && Array.isArray(examData.sanitizedQuestions) && examData.sanitizedQuestions.length > 0) {
+      answeredCount = examData.sanitizedQuestions.filter((q: any, idx: number) => {
+        return cleanAnswers[idx] !== undefined || (q.id && cleanAnswers[q.id] !== undefined);
+      }).length;
+    } else {
+      answeredCount = Object.keys(cleanAnswers).length;
+    }
 
-    const writtenAnswersCount = params.writtenAnswers
-      ? Object.keys(params.writtenAnswers).filter((k) => {
-          const val = params.writtenAnswers![k];
-          return val && val.answerText && String(val.answerText).trim().length > 0;
-        }).length
-      : 0;
+    const writtenAnswersCount = Object.keys(cleanWrittenAnswers).length;
 
-    // Persist submission record onto assignment document (Student is authorized under Firestore rules)
+    // 2. Safely Persist Submission to Candidate's Assignment Document FIRST
+    // (Students are authorized to update their own assignment under Firestore security rules)
     const assignmentId = `${params.examId}_${params.studentId}`;
     try {
       const assignRef = doc(db, 'assignments', assignmentId);
@@ -215,23 +224,144 @@ export const resultService = {
         batch: params.batch || examData?.batch || '',
         status: 'submitted',
         submittedAt: serverTimestamp(),
-        answers: params.answers,
+        answers: cleanAnswers,
         answersCount: answeredCount,
         totalMarks,
       };
 
-      if (params.writtenAnswers) {
-        assignmentPayload.writtenAnswers = params.writtenAnswers;
+      if (Object.keys(cleanWrittenAnswers).length > 0) {
+        assignmentPayload.writtenAnswers = cleanWrittenAnswers;
         assignmentPayload.writtenAnswersCount = writtenAnswersCount;
       }
 
       await setDoc(assignRef, assignmentPayload, { merge: true });
     } catch (assignErr) {
-      console.warn('Assignment submission record note:', assignErr);
+      console.warn('Assignment setDoc submission record notice, attempting fallback update:', assignErr);
+      try {
+        const assignRef = doc(db, 'assignments', assignmentId);
+        const updatePayload: Record<string, any> = {
+          status: 'submitted',
+          submittedAt: serverTimestamp(),
+          answers: cleanAnswers,
+          answersCount: answeredCount,
+        };
+        if (Object.keys(cleanWrittenAnswers).length > 0) {
+          updatePayload.writtenAnswers = cleanWrittenAnswers;
+          updatePayload.writtenAnswersCount = writtenAnswersCount;
+        }
+        await updateDoc(assignRef, updatePayload);
+      } catch (updateErr) {
+        console.error('Assignment fallback update error:', updateErr);
+        throw new Error('Failed to record examination submission. Please verify your connection and retry.');
+      }
     }
 
-    // Return safe pending-result object without exposing provisional 0s as authoritative
-    const pendingResultData: Result = {
+    // 3. Authoritative Cloud Function Evaluation (Server-side grading against master question bank)
+    try {
+      const submitFn = httpsCallable<
+        { examId: string; answers: Record<string, string | number>; writtenAnswers?: Record<string, any> },
+        any
+      >(functions, 'submitExamAttempt');
+
+      // 30s timeout allows sufficient time for Cloud Function cold starts without early abandonment
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Cloud Function invocation timed out after 30s')), 30000)
+      );
+
+      const response = await Promise.race([
+        submitFn({
+          examId: params.examId,
+          answers: cleanAnswers,
+          writtenAnswers: cleanWrittenAnswers,
+        }),
+        timeoutPromise,
+      ]);
+
+      const data = response?.data;
+      if (data) {
+        return {
+          id: data.resultId || resultId,
+          examId: params.examId,
+          studentId: params.studentId,
+          studentName: data.studentName || params.studentName || 'Student Candidate',
+          kmuRegistrationNo: data.kmuRegistrationNo || params.kmuRegistrationNo,
+          examTitle: params.examTitle || examData?.title || 'Academic Examination',
+          examType: (params.examType as any) || examData?.type || 'exam',
+          subject: params.subject || examData?.subject || 'Clinical Assessment',
+          program: params.program || examData?.program,
+          semester: params.semester || examData?.semester,
+          batch: params.batch || examData?.batch,
+          marks: Number(data.marks) || 0,
+          totalMarks: Number(data.totalMarks) || totalMarks,
+          percentage: Number(data.percentage) || 0,
+          passed: Boolean(data.passed),
+          grade: data.grade || '',
+          status: data.status || (hasWrittenSection ? 'pending' : 'graded'),
+          mcqMarks: Number(data.mcqMarks) || Number(data.marks) || 0,
+          mcqTotalMarks: Number(data.mcqTotalMarks) || totalMarks,
+          answersCount: data.answersCount || answeredCount,
+          correctCount: data.correctCount,
+          totalQuestions: data.totalQuestions,
+          totalMCQs: data.totalMCQs,
+          answeredMCQs: data.answeredMCQs,
+          correctMCQs: data.correctMCQs,
+          incorrectMCQs: data.incorrectMCQs,
+          unansweredMCQs: data.unansweredMCQs,
+          totalObjectiveMarks: data.totalObjectiveMarks,
+          obtainedObjectiveMarks: data.obtainedObjectiveMarks,
+          totalWrittenQuestions: data.totalWrittenQuestions,
+          writtenAnsweredCount: data.writtenAnsweredCount,
+          writtenUnansweredCount: data.writtenUnansweredCount,
+          requiresWrittenGrading: data.requiresWrittenGrading,
+          submittedAt: data.submittedAt || new Date().toISOString(),
+        };
+      }
+    } catch (fnErr: any) {
+      console.warn(
+        `[resultService] Cloud Function call notice (${fnErr?.code || fnErr?.message}). Checking if result document was already written.`
+      );
+      // Double check if result document was created on server
+      try {
+        const afterSnap = await getDoc(resultRef);
+        if (afterSnap.exists()) {
+          return { id: afterSnap.id, ...afterSnap.data() } as Result;
+        }
+      } catch (readErr) {
+        console.warn('Could not read existing result document:', readErr);
+      }
+    }
+
+    // 4. Safe Fallback View: Construct authoritative-compatible pending result
+    // When Cloud Functions are not active or in local dev, the assignment is already saved.
+    // Calculate objective MCQ marks if questions collection is accessible to authorized user
+    let mcqScored: any = null;
+    try {
+      const qCol = collection(db, 'questions');
+      const qQuery = query(qCol, where('examId', '==', params.examId));
+      const qSnap = await getDocs(qQuery);
+      if (!qSnap.empty) {
+        const masterQs = qSnap.docs.map((d) => ({ id: d.id, ...d.data() } as MasterQuestion));
+        mcqScored = gradeExamSubmission(masterQs, cleanAnswers, examData?.passingMarks);
+      }
+    } catch {
+      // In zero-trust mode, student cannot read raw answer keys directly from client
+    }
+
+    const marks = mcqScored ? mcqScored.obtainedMarks : 0;
+    const percentage = mcqScored ? mcqScored.percentage : 0;
+    const passed = mcqScored ? mcqScored.passed : false;
+    const correctCount = mcqScored ? mcqScored.correctCount : 0;
+    const status: 'pending' | 'graded' = hasWrittenSection ? 'pending' : (mcqScored ? 'graded' : 'pending');
+
+    const totalMCQs = mcqScored ? mcqScored.totalQuestions : (examData?.questionsCount || answeredCount);
+    const correctMCQs = correctCount;
+    const answeredMCQs = answeredCount;
+    const incorrectMCQs = Math.max(0, answeredMCQs - correctMCQs);
+    const unansweredMCQs = Math.max(0, totalMCQs - answeredMCQs);
+    const totalWrittenQuestions = Array.isArray(sanitizedWrittenQs) ? sanitizedWrittenQs.length : 0;
+    const writtenUnansweredCount = Math.max(0, totalWrittenQuestions - writtenAnswersCount);
+
+    const resultData: Result = {
       id: resultId,
       examId: params.examId,
       studentId: params.studentId,
@@ -243,18 +373,34 @@ export const resultService = {
       program: params.program || examData?.program,
       semester: params.semester || examData?.semester,
       batch: params.batch || examData?.batch,
-      marks: 0,
+      marks,
       totalMarks,
-      percentage: 0,
-      passed: false,
+      percentage,
+      passed,
+      grade: mcqScored ? mcqScored.grade : calculateKmuGrade(percentage),
+      mcqMarks: marks,
+      mcqTotalMarks: mcqScored ? mcqScored.totalMarks : totalMarks,
       answersCount: answeredCount,
-      correctCount: 0,
+      correctCount,
+      totalQuestions: totalMCQs + totalWrittenQuestions,
+      totalMCQs,
+      answeredMCQs,
+      correctMCQs,
+      incorrectMCQs,
+      unansweredMCQs,
+      totalObjectiveMarks: mcqScored ? mcqScored.totalMarks : totalMarks,
+      obtainedObjectiveMarks: marks,
+      totalWrittenQuestions,
+      writtenAnsweredCount: writtenAnswersCount,
+      writtenUnansweredCount,
       requiresWrittenGrading: hasWrittenSection,
+      answers: cleanAnswers,
+      writtenAnswers: cleanWrittenAnswers,
       submittedAt: new Date().toISOString() as any,
-      status: 'pending',
+      status,
     };
 
-    return pendingResultData;
+    return resultData;
   },
 
   /**
@@ -334,6 +480,8 @@ export const resultService = {
       } else {
         // Pending written evaluation by teacher
         status = 'pending';
+        totalMarks = Number(examData?.totalMarks) || (graded.totalMarks + (Number(examData?.writtenTotalMarks) || 0));
+        percentage = totalMarks > 0 ? Math.round((marks / totalMarks) * 1000) / 10 : 0;
       }
     }
 
@@ -356,9 +504,22 @@ export const resultService = {
       grade,
       mcqMarks: graded.obtainedMarks,
       mcqTotalMarks: graded.totalMarks,
+      totalMCQs: masterQuestions.length,
+      answeredMCQs: graded.answersCount,
+      correctMCQs: graded.correctCount,
+      incorrectMCQs: Math.max(0, graded.answersCount - graded.correctCount),
+      unansweredMCQs: Math.max(0, masterQuestions.length - graded.answersCount),
+      totalObjectiveMarks: graded.totalMarks,
+      obtainedObjectiveMarks: graded.obtainedMarks,
+      totalWrittenQuestions: Array.isArray(examData?.sanitizedWrittenQuestions) ? examData.sanitizedWrittenQuestions.length : 0,
+      writtenAnsweredCount: assignData.writtenAnswersCount || (assignData.writtenAnswers ? Object.keys(assignData.writtenAnswers).length : 0),
+      writtenUnansweredCount: Math.max(0, (Array.isArray(examData?.sanitizedWrittenQuestions) ? examData.sanitizedWrittenQuestions.length : 0) - (assignData.writtenAnswersCount || 0)),
+      totalQuestions: masterQuestions.length + (Array.isArray(examData?.sanitizedWrittenQuestions) ? examData.sanitizedWrittenQuestions.length : 0),
       requiresWrittenGrading: hasWrittenSection,
       answersCount: graded.answersCount,
       correctCount: graded.correctCount,
+      answers: answers || {},
+      writtenAnswers: assignData.writtenAnswers || {},
       submittedAt: assignData.submittedAt || serverTimestamp(),
       status,
       ...(existingResult?.writtenMarks !== undefined ? {
@@ -379,14 +540,16 @@ export const resultService = {
       evaluatedAt: serverTimestamp(),
     });
 
-    // Update assignment status to graded
-    try {
-      await updateDoc(doc(db, 'assignments', assignmentId), {
-        status: 'graded',
-        gradedAt: serverTimestamp(),
-      });
-    } catch (uErr) {
-      console.warn('Assignment status update notice:', uErr);
+    // Update assignment status to graded only if fully graded
+    if (status === 'graded') {
+      try {
+        await updateDoc(doc(db, 'assignments', assignmentId), {
+          status: 'graded',
+          gradedAt: serverTimestamp(),
+        });
+      } catch (uErr) {
+        console.warn('Assignment status update notice:', uErr);
+      }
     }
 
     return resultRecord;
@@ -399,17 +562,11 @@ export const resultService = {
     examId: string,
     evaluatorUid?: string
   ): Promise<{ gradedCount: number; results: Result[] }> {
-    const assignmentsCol = collection(db, 'assignments');
-    const q = query(
-      assignmentsCol,
-      where('examId', '==', examId),
-      where('status', '==', 'submitted')
-    );
-    const snap = await getDocs(q);
+    const pendingDocs = await this.getPendingSubmissionsForExam(examId);
 
     const results: Result[] = [];
-    for (const docSnap of snap.docs) {
-      const studentId = docSnap.data().studentId;
+    for (const docData of pendingDocs) {
+      const studentId = docData.studentId;
       if (studentId) {
         try {
           const res = await this.gradeSubmission({ examId, studentId, evaluatorUid });
@@ -430,14 +587,34 @@ export const resultService = {
    * Retrieves pending submissions for an exam.
    */
   async getPendingSubmissionsForExam(examId: string): Promise<any[]> {
+    if (!examId) return [];
     const assignmentsCol = collection(db, 'assignments');
-    const q = query(
-      assignmentsCol,
-      where('examId', '==', examId),
-      where('status', '==', 'submitted')
-    );
-    const snap = await getDocs(q);
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    try {
+      const q = query(
+        assignmentsCol,
+        where('examId', '==', examId),
+        where('status', '==', 'submitted')
+      );
+      const snap = await getDocs(q);
+      return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    } catch (queryErr) {
+      // In-memory fallback if composite index for examId + status is pending on Firebase
+      console.warn('getPendingSubmissionsForExam fallback query:', queryErr);
+      try {
+        const qSimple = query(assignmentsCol, where('examId', '==', examId));
+        const snap = await getDocs(qSimple);
+        return snap.docs
+          .map((d) => ({ id: d.id, ...d.data() }))
+          .filter(
+            (a: any) =>
+              a.status === 'submitted' ||
+              (a.answers && Object.keys(a.answers).length > 0 && a.status !== 'graded')
+          );
+      } catch (fallbackErr) {
+        console.error('Failed to load pending submissions:', fallbackErr);
+        return [];
+      }
+    }
   },
 
   /**

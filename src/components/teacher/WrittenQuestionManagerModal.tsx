@@ -290,7 +290,7 @@ export const WrittenQuestionManagerModal: React.FC<WrittenQuestionManagerModalPr
               </Badge>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
               <div>
                 <label style={{ display: 'block', fontSize: '0.825rem', fontWeight: 600, color: 'var(--color-slate-700)', marginBottom: '0.35rem' }}>
                   Question Type
@@ -355,7 +355,7 @@ export const WrittenQuestionManagerModal: React.FC<WrittenQuestionManagerModalPr
               </div>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
               <Input
                 type="number"
                 label="Minimum Expected Words (Optional Guidance)"

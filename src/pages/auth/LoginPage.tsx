@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
 import { Logo, Input, Button, Alert, Checkbox } from '../../components/ui';
+import { getDefaultDashboardRoute } from '../../utils/permissions';
 
 export const LoginPage: React.FC = () => {
   const { login, loginWithKmu } = useAuth();
@@ -15,9 +16,28 @@ export const LoginPage: React.FC = () => {
   const [rememberMe, setRememberMe] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [securityNotice, setSecurityNotice] = useState<string | null>(null);
 
-  // Determine redirect path
+  // Parse security alerts from tab switching or session timeout
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (params.get('security_violation') === 'tab_switched') {
+      setSecurityNotice(
+        '🔒 Examination Security Alert: You switched browser tabs or minimized the examination window during an active assessment. Under KMU institutional rules, your exam session was locked and you were signed out for academic integrity.'
+      );
+    } else if (params.get('reason') === 'session_closed') {
+      setSecurityNotice('Your previous examination session has ended. Please log in to continue.');
+    }
+  }, [location.search]);
+
+  // Determine redirect path safely without 403 loops
   const from = (location.state as { from?: { pathname: string } })?.from?.pathname;
+
+  const handleKmuFocus = () => {
+    if (!kmuRegNo || !kmuRegNo.trim()) {
+      setKmuRegNo('2026/KMU/RCNS/');
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -38,12 +58,21 @@ export const LoginPage: React.FC = () => {
     setIsLoading(true);
     try {
       if (activePortalTab === 'student') {
-        await loginWithKmu(kmuRegNo.trim(), password);
-        navigate(from || '/student', { replace: true });
+        const studentRole = await loginWithKmu(kmuRegNo.trim(), password);
+        const resolvedRole = studentRole || 'student';
+        const defaultRoute = getDefaultDashboardRoute(resolvedRole);
+        const targetRoute = (from && !from.includes('unauthorized') && !from.includes('login') && from.startsWith('/student'))
+          ? from
+          : defaultRoute;
+        navigate(targetRoute, { replace: true });
       } else {
         const userRole = await login(email.trim(), password);
-        const defaultRoute = userRole === 'teacher' ? '/teacher' : '/admin/dashboard';
-        navigate(from || defaultRoute, { replace: true });
+        const defaultRoute = getDefaultDashboardRoute(userRole);
+        const targetRoute = (from && !from.includes('unauthorized') && !from.includes('login') && (
+          (userRole === 'teacher' && from.startsWith('/teacher')) ||
+          (userRole === 'admin' && (from.startsWith('/admin') || from.startsWith('/teacher')))
+        )) ? from : defaultRoute;
+        navigate(targetRoute, { replace: true });
       }
     } catch (err: unknown) {
       const error = err as { code?: string; message?: string };
@@ -70,179 +99,209 @@ export const LoginPage: React.FC = () => {
     }
   };
 
-  const handleQuickFill = (demoRole: 'student' | 'teacher' | 'admin') => {
-    if (demoRole === 'student') {
-      setActivePortalTab('student');
-      setKmuRegNo('2026/KMU-RCNS/001');
-      setPassword('Password123!');
-    } else if (demoRole === 'teacher') {
-      setActivePortalTab('staff');
-      setEmail('dr.tariq@royalcollege.edu.pk');
-      setPassword('Password123!');
-    } else {
-      setActivePortalTab('staff');
-      setEmail('admin@royalcollege.edu.pk');
-      setPassword('Admin@Royal2026!');
-    }
-  };
-
   return (
     <div
+      className="auth-page-root"
       style={{
+        height: '100vh',
         minHeight: '100vh',
         display: 'flex',
-        backgroundColor: '#0f2744',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: 'radial-gradient(circle at 10% 15%, rgba(13, 148, 136, 0.25) 0%, transparent 45%), radial-gradient(circle at 90% 85%, rgba(14, 73, 139, 0.35) 0%, transparent 45%), linear-gradient(135deg, #091a2f 0%, #0e498b 55%, #0d9488 100%)',
+        position: 'relative',
+        overflow: 'hidden',
+        padding: '1.5rem',
+        boxSizing: 'border-box',
       }}
     >
-      {/* Left Showcase Banner (Desktop/Tablet) */}
+      {/* Academic background ambient circles */}
       <div
-        className="auth-showcase-panel"
         style={{
-          flex: '1 1 50%',
-          background: 'linear-gradient(145deg, #0f2744 0%, #0e498b 60%, #0d9488 100%)',
-          padding: '3.5rem',
-          display: 'flex',
-          flexDirection: 'column',
-          justifyContent: 'space-between',
-          color: '#ffffff',
-          position: 'relative',
-          overflow: 'hidden',
+          position: 'absolute',
+          top: '-80px',
+          left: '-80px',
+          width: '420px',
+          height: '420px',
+          borderRadius: '50%',
+          background: 'radial-gradient(circle, rgba(255,255,255,0.06) 0%, transparent 70%)',
+          pointerEvents: 'none',
         }}
-      >
-        {/* Academic watermark circles */}
-        <div
-          style={{
-            position: 'absolute',
-            top: '-80px',
-            right: '-80px',
-            width: '320px',
-            height: '320px',
-            borderRadius: '50%',
-            background: 'radial-gradient(circle, rgba(255,255,255,0.08) 0%, transparent 70%)',
-            pointerEvents: 'none',
-          }}
-        />
-        <div
-          style={{
-            position: 'absolute',
-            bottom: '-120px',
-            left: '-60px',
-            width: '380px',
-            height: '380px',
-            borderRadius: '50%',
-            background: 'radial-gradient(circle, rgba(13,148,136,0.2) 0%, transparent 70%)',
-            pointerEvents: 'none',
-          }}
-        />
-
-        {/* Top Branding */}
-        <div>
-          <Logo variant="light" size="lg" />
-          <div
-            style={{
-              marginTop: '1.5rem',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '0.5rem',
-              padding: '0.35rem 0.85rem',
-              borderRadius: 'var(--radius-full)',
-              backgroundColor: 'rgba(255, 255, 255, 0.12)',
-              backdropFilter: 'blur(4px)',
-              fontSize: '0.8rem',
-              fontWeight: 600,
-              letterSpacing: '0.02em',
-            }}
-          >
-            <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#10b981' }} />
-            Affiliated with Khyber Medical University (KMU) Peshawar
-          </div>
-        </div>
-
-        {/* Middle Showcase Content */}
-        <div style={{ margin: '2.5rem 0' }}>
-          <h1
-            style={{
-              fontSize: '2.25rem',
-              fontWeight: 800,
-              fontFamily: 'var(--font-heading)',
-              lineHeight: 1.2,
-              color: '#ffffff',
-              marginBottom: '1rem',
-            }}
-          >
-            Examination, Quiz &amp; Result Management System
-          </h1>
-          <p
-            style={{
-              fontSize: '1.05rem',
-              lineHeight: 1.6,
-              color: '#e2e8f0',
-              maxWidth: '520px',
-            }}
-          >
-            Official institutional testing portal for <strong>ROYAL COLLEGE OF NURSING SWAT</strong>. Secure digital assessment for Nursing, DPT, MLT, and Allied Health Sciences.
-          </p>
-
-          {/* Academic Highlights */}
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(2, 1fr)',
-              gap: '1rem',
-              marginTop: '2rem',
-              maxWidth: '480px',
-            }}
-          >
-            <div
-              style={{
-                padding: '1rem',
-                borderRadius: 'var(--radius-md)',
-                backgroundColor: 'rgba(255, 255, 255, 0.08)',
-                border: '1px solid rgba(255, 255, 255, 0.12)',
-              }}
-            >
-              <div style={{ fontSize: '1.4rem', fontWeight: 800, color: '#fde68a' }}>KMU Verified</div>
-              <div style={{ fontSize: '0.78rem', color: '#cbd5e1', marginTop: '0.2rem' }}>Registration Number based login</div>
-            </div>
-            <div
-              style={{
-                padding: '1rem',
-                borderRadius: 'var(--radius-md)',
-                backgroundColor: 'rgba(255, 255, 255, 0.08)',
-                border: '1px solid rgba(255, 255, 255, 0.12)',
-              }}
-            >
-              <div style={{ fontSize: '1.4rem', fontWeight: 800, color: '#99f6e4' }}>Real-time Results</div>
-              <div style={{ fontSize: '0.78rem', color: '#cbd5e1', marginTop: '0.2rem' }}>Automated grade transcripts</div>
-            </div>
-          </div>
-        </div>
-
-        {/* Footer info */}
-        <div style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
-          &copy; {new Date().getFullYear()} ROYAL COLLEGE OF NURSING SWAT. All rights reserved.
-        </div>
-      </div>
-
-      {/* Right Login Form Panel */}
+      />
       <div
         style={{
-          flex: '1 1 50%',
+          position: 'absolute',
+          bottom: '-100px',
+          right: '-80px',
+          width: '460px',
+          height: '460px',
+          borderRadius: '50%',
+          background: 'radial-gradient(circle, rgba(13,148,136,0.2) 0%, transparent 70%)',
+          pointerEvents: 'none',
+        }}
+      />
+
+      {/* Main Unified Layout Container */}
+      <div
+        className="auth-layout-container"
+        style={{
+          width: '100%',
+          maxWidth: '1060px',
           display: 'flex',
-          flexDirection: 'column',
-          justifyContent: 'center',
           alignItems: 'center',
-          padding: '2.5rem 2rem',
-          backgroundColor: '#ffffff',
+          justifyContent: 'center',
+          gap: '2.5rem',
+          position: 'relative',
+          zIndex: 2,
         }}
       >
-        <div style={{ maxWidth: '440px', width: '100%' }}>
+        {/* Left Showcase Banner */}
+        <div
+          className="auth-showcase-panel"
+          style={{
+            flex: '1 1 500px',
+            maxWidth: '520px',
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'center',
+            alignItems: 'center',
+            textAlign: 'center',
+            color: '#ffffff',
+          }}
+        >
+          {/* Top Branding & Affiliation */}
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+            <Logo variant="light" size="lg" subtitle={false} />
+            <div
+              style={{
+                marginTop: '1rem',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.5rem',
+                padding: '0.35rem 0.85rem',
+                borderRadius: 'var(--radius-full)',
+                backgroundColor: 'rgba(255, 255, 255, 0.12)',
+                backdropFilter: 'blur(6px)',
+                fontSize: '0.8rem',
+                fontWeight: 600,
+                letterSpacing: '0.02em',
+              }}
+            >
+              <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#10b981' }} />
+              Affiliated with Khyber Medical University (KMU) Peshawar
+            </div>
+          </div>
+
+          {/* Title Aligned in One Line & Second Line Centered With Reference to It */}
+          <div style={{ margin: '1.5rem 0', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+            <h1
+              style={{
+                fontSize: '2.25rem',
+                fontWeight: 800,
+                fontFamily: 'var(--font-heading)',
+                lineHeight: 1.25,
+                color: '#ffffff',
+                margin: '0 0 0.75rem 0',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                textAlign: 'center',
+              }}
+            >
+              <span style={{ whiteSpace: 'nowrap' }}>Examination, Quiz &amp; Result</span>
+              <span style={{ color: '#99f6e4', marginTop: '0.2rem', textAlign: 'center' }}>
+                Management System
+              </span>
+            </h1>
+            <p
+              style={{
+                fontSize: '0.95rem',
+                lineHeight: 1.5,
+                color: '#e2e8f0',
+                maxWidth: '460px',
+                margin: 0,
+                textAlign: 'center',
+              }}
+            >
+              Official institutional testing portal for <strong>ROYAL COLLEGE OF NURSING SWAT</strong>.
+            </p>
+
+            {/* Academic Highlights */}
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(2, 1fr)',
+                gap: '0.85rem',
+                marginTop: '1.5rem',
+                maxWidth: '440px',
+                width: '100%',
+              }}
+            >
+              <div
+                style={{
+                  padding: '0.75rem 1rem',
+                  borderRadius: 'var(--radius-md)',
+                  backgroundColor: 'rgba(255, 255, 255, 0.08)',
+                  border: '1px solid rgba(255, 255, 255, 0.12)',
+                  backdropFilter: 'blur(4px)',
+                }}
+              >
+                <div style={{ fontSize: '1.15rem', fontWeight: 800, color: '#fde68a' }}>KMU Verified</div>
+                <div style={{ fontSize: '0.75rem', color: '#cbd5e1', marginTop: '0.15rem' }}>
+                  Registration Number based login
+                </div>
+              </div>
+              <div
+                style={{
+                  padding: '0.75rem 1rem',
+                  borderRadius: 'var(--radius-md)',
+                  backgroundColor: 'rgba(255, 255, 255, 0.08)',
+                  border: '1px solid rgba(255, 255, 255, 0.12)',
+                  backdropFilter: 'blur(4px)',
+                }}
+              >
+                <div style={{ fontSize: '1.15rem', fontWeight: 800, color: '#99f6e4' }}>Real-time Results</div>
+                <div style={{ fontSize: '0.75rem', color: '#cbd5e1', marginTop: '0.15rem' }}>
+                  Automated grade transcripts
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Footer info */}
+          <div style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
+            &copy; {new Date().getFullYear()} ROYAL COLLEGE OF NURSING SWAT. All rights reserved.
+          </div>
+        </div>
+
+        {/* Right Floating Login Box Card */}
+        <div
+          className="auth-card-panel"
+          style={{
+            flex: '0 0 490px',
+            maxWidth: '490px',
+            width: '100%',
+            backgroundColor: '#ffffff',
+            borderRadius: '1.25rem',
+            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.15)',
+            padding: '2.25rem 2.25rem',
+            boxSizing: 'border-box',
+          }}
+        >
+          {/* Mobile-Only Header Branding (iOS & Android) */}
+          <div className="auth-mobile-header" style={{ display: 'none', marginBottom: '1.25rem', textAlign: 'center' }}>
+            <Logo variant="dark" size="sm" subtitle={false} />
+            <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#0d9488', marginTop: '0.35rem', letterSpacing: '0.02em', textTransform: 'uppercase' }}>
+              Examination, Quiz &amp; Result System
+            </div>
+          </div>
+
           {/* Header */}
-          <div style={{ marginBottom: '1.5rem' }}>
-            <h2 style={{ fontSize: '1.75rem', fontWeight: 800, color: 'var(--color-slate-900)' }}>
+          <div style={{ marginBottom: '1.25rem' }}>
+            <h2 style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--color-slate-900)', margin: 0 }}>
               Sign In to Your Account
             </h2>
-            <p style={{ fontSize: '0.9rem', color: 'var(--color-slate-500)', marginTop: '0.35rem' }}>
+            <p style={{ fontSize: '0.85rem', color: 'var(--color-slate-500)', marginTop: '0.25rem' }}>
               Access your institutional examination and academic records portal.
             </p>
           </div>
@@ -254,7 +313,7 @@ export const LoginPage: React.FC = () => {
               backgroundColor: 'var(--color-slate-100)',
               padding: '4px',
               borderRadius: 'var(--radius-md)',
-              marginBottom: '1.75rem',
+              marginBottom: '1.25rem',
             }}
           >
             <button
@@ -265,8 +324,8 @@ export const LoginPage: React.FC = () => {
               }}
               style={{
                 flex: 1,
-                padding: '0.6rem 0.5rem',
-                fontSize: '0.875rem',
+                padding: '0.55rem 0.5rem',
+                fontSize: '0.85rem',
                 fontWeight: 700,
                 borderRadius: 'var(--radius-sm)',
                 border: 'none',
@@ -287,8 +346,8 @@ export const LoginPage: React.FC = () => {
               }}
               style={{
                 flex: 1,
-                padding: '0.6rem 0.5rem',
-                fontSize: '0.875rem',
+                padding: '0.55rem 0.5rem',
+                fontSize: '0.85rem',
                 fontWeight: 700,
                 borderRadius: 'var(--radius-sm)',
                 border: 'none',
@@ -303,9 +362,18 @@ export const LoginPage: React.FC = () => {
             </button>
           </div>
 
+          {/* Security Alert from Tab Switching or Inactivity */}
+          {securityNotice && (
+            <div style={{ marginBottom: '1rem' }}>
+              <Alert type="warning" onDismiss={() => setSecurityNotice(null)}>
+                {securityNotice}
+              </Alert>
+            </div>
+          )}
+
           {/* Error Alert */}
           {errorMessage && (
-            <div style={{ marginBottom: '1.5rem' }}>
+            <div style={{ marginBottom: '1rem' }}>
               <Alert type="danger" onDismiss={() => setErrorMessage(null)}>
                 {errorMessage}
               </Alert>
@@ -313,14 +381,15 @@ export const LoginPage: React.FC = () => {
           )}
 
           {/* Login Form */}
-          <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+          <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             {activePortalTab === 'student' ? (
               /* STUDENT LOGIN: KMU Registration Number + Password */
               <Input
                 label="KMU Registration Number"
-                placeholder="2026/KMU-RCNS/001"
-                helperText="Enter your official KMU Registration Number (Not email)"
+                placeholder="2026/KMU/RCNS/01"
                 value={kmuRegNo}
+                onFocus={handleKmuFocus}
+                onClick={handleKmuFocus}
                 onChange={(e) => setKmuRegNo(e.target.value)}
                 required
                 requiredIndicator
@@ -336,7 +405,7 @@ export const LoginPage: React.FC = () => {
               <Input
                 label="Institutional Email Address"
                 type="email"
-                placeholder="e.g. faculty@rcns.edu.pk"
+                placeholder="faculty@rcns.edu.pk"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
@@ -367,7 +436,7 @@ export const LoginPage: React.FC = () => {
             />
 
             {/* Remember Me & Forgot Password */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.85rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.825rem' }}>
               <Checkbox
                 label="Remember me"
                 checked={rememberMe}
@@ -378,7 +447,7 @@ export const LoginPage: React.FC = () => {
                 style={{
                   color: 'var(--color-primary-600)',
                   fontWeight: 600,
-                  fontSize: '0.85rem',
+                  fontSize: '0.825rem',
                 }}
               >
                 Forgot password?
@@ -394,7 +463,8 @@ export const LoginPage: React.FC = () => {
               style={{
                 backgroundColor: '#0f2744',
                 borderColor: '#0f2744',
-                marginTop: '0.5rem',
+                marginTop: '0.25rem',
+                fontWeight: 700,
               }}
             >
               {activePortalTab === 'student' ? 'Sign In to Student Portal' : 'Sign In to Institutional Portal'}
@@ -403,13 +473,15 @@ export const LoginPage: React.FC = () => {
 
           {/* Registration Prompt */}
           <div
+            className="auth-register-prompt"
             style={{
-              marginTop: '1.75rem',
-              paddingTop: '1.25rem',
+              marginTop: '1.25rem',
+              paddingTop: '1rem',
               borderTop: '1px solid var(--color-slate-200)',
               textAlign: 'center',
-              fontSize: '0.875rem',
+              fontSize: '0.825rem',
               color: 'var(--color-slate-600)',
+              whiteSpace: 'nowrap',
             }}
           >
             New Student at ROYAL COLLEGE OF NURSING SWAT?{' '}
@@ -424,78 +496,72 @@ export const LoginPage: React.FC = () => {
               Register Here
             </Link>
           </div>
-
-          {/* Demo Account Quick Switcher Helper */}
-          <div
-            style={{
-              marginTop: '2rem',
-              padding: '1rem',
-              backgroundColor: 'var(--color-slate-50)',
-              borderRadius: 'var(--radius-md)',
-              border: '1px dashed var(--color-slate-300)',
-            }}
-          >
-            <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--color-slate-500)', textTransform: 'uppercase', marginBottom: '0.5rem' }}>
-              Demo Quick-Fill Credentials:
-            </div>
-            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-              <button
-                type="button"
-                onClick={() => handleQuickFill('student')}
-                style={{
-                  padding: '0.25rem 0.5rem',
-                  fontSize: '0.75rem',
-                  borderRadius: 'var(--radius-sm)',
-                  border: '1px solid var(--color-primary-200)',
-                  backgroundColor: 'var(--color-primary-50)',
-                  color: 'var(--color-primary-800)',
-                  cursor: 'pointer',
-                  fontWeight: 600,
-                }}
-              >
-                Student Demo
-              </button>
-              <button
-                type="button"
-                onClick={() => handleQuickFill('teacher')}
-                style={{
-                  padding: '0.25rem 0.5rem',
-                  fontSize: '0.75rem',
-                  borderRadius: 'var(--radius-sm)',
-                  border: '1px solid #99f6e4',
-                  backgroundColor: '#ccfbf1',
-                  color: '#0f766e',
-                  cursor: 'pointer',
-                  fontWeight: 600,
-                }}
-              >
-                Faculty Demo
-              </button>
-              <button
-                type="button"
-                onClick={() => handleQuickFill('admin')}
-                style={{
-                  padding: '0.25rem 0.5rem',
-                  fontSize: '0.75rem',
-                  borderRadius: 'var(--radius-sm)',
-                  border: '1px solid #fecaca',
-                  backgroundColor: '#fef2f2',
-                  color: '#991b1b',
-                  cursor: 'pointer',
-                  fontWeight: 600,
-                }}
-              >
-                Admin Demo
-              </button>
-            </div>
-          </div>
         </div>
       </div>
 
       <style>{`
+        /* Responsive adaptations for Tablets, iOS, and Android */
         @media (max-width: 900px) {
+          .auth-page-root {
+            height: auto !important;
+            min-height: 100vh !important;
+            min-height: 100dvh !important;
+            overflow-y: auto !important;
+            -webkit-overflow-scrolling: touch !important;
+            padding-top: max(1.25rem, env(safe-area-inset-top)) !important;
+            padding-bottom: max(1.25rem, env(safe-area-inset-bottom)) !important;
+            padding-left: max(1rem, env(safe-area-inset-left)) !important;
+            padding-right: max(1rem, env(safe-area-inset-right)) !important;
+          }
+          .auth-layout-container {
+            justify-content: center !important;
+            gap: 0 !important;
+          }
           .auth-showcase-panel {
             display: none !important;
+          }
+          .auth-card-panel {
+            flex: 1 1 auto !important;
+            max-width: 440px !important;
+            padding: 2rem 1.75rem !important;
+          }
+          .auth-mobile-header {
+            display: flex !important;
+            flex-direction: column !important;
+            align-items: center !important;
+          }
+        }
+
+        /* Mobile Phones (iOS Safari / Android Chrome) */
+        @media (max-width: 768px) {
+          .auth-card-panel input {
+            font-size: 16px !important; /* Prevents auto-zoom on iOS Safari input focus */
+            min-height: 44px; /* Apple HIG / Material touch target minimum */
+          }
+          .auth-card-panel button[type="submit"] {
+            min-height: 46px;
+          }
+        }
+
+        /* Narrow Mobile Screens (iPhone SE, smaller Android devices) */
+        @media (max-width: 480px) {
+          .auth-card-panel {
+            padding: 1.5rem 1.15rem !important;
+            border-radius: 1rem !important;
+          }
+          .auth-register-prompt {
+            white-space: normal !important;
+            line-height: 1.5 !important;
+          }
+        }
+
+        /* Handle short desktop screens or open on-screen virtual keyboards */
+        @media (max-height: 640px) {
+          .auth-page-root {
+            height: auto !important;
+            min-height: 100vh !important;
+            min-height: 100dvh !important;
+            overflow-y: auto !important;
           }
         }
       `}</style>

@@ -21,7 +21,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
   navItems,
   role,
 }) => {
-  const { userProfile, studentProfile, teacherProfile, logout } = useAuth();
+  const { userProfile, studentProfile, teacherProfile, adminProfile, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -38,15 +38,21 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
 
   // User display name & info
   const displayName =
-    userProfile?.name ||
-    (role === 'student' ? 'Muhammad Farhan' : role === 'teacher' ? 'Dr. Tariq Shah' : 'Admin User');
+    userProfile?.name?.trim() ||
+    (role === 'student'
+      ? 'Muhammad Farhan'
+      : role === 'teacher'
+      ? 'Dr. Tariq Shah'
+      : (userProfile?.email === 'naveedartwith@gmail.com' || adminProfile?.email === 'naveedartwith@gmail.com'
+          ? 'Super Administrator'
+          : 'Super Administrator'));
   
   const displaySubtitle =
     role === 'student'
       ? studentProfile?.kmuRegistrationNo || '2026/KMU-RCNS/001'
       : role === 'teacher'
       ? teacherProfile?.department || 'Faculty Member'
-      : 'System Administrator';
+      : 'Institutional Administrator';
 
   const roleBadgeColor =
     role === 'admin'
@@ -99,7 +105,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
             justifyContent: sidebarCollapsed ? 'center' : 'space-between',
           }}
         >
-          <Logo variant="light" subtitle={!sidebarCollapsed} size={sidebarCollapsed ? 'sm' : 'md'} />
+          <Logo variant="light" subtitle={false} size={sidebarCollapsed ? 'sm' : 'md'} />
         </div>
 
         {/* Portal Identifier Pill */}
@@ -210,8 +216,8 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', minWidth: 0, flex: 1 }}>
               <Avatar name={displayName} size="sm" roleBadge={role} />
               <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
-                <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#ffffff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {displayName}
+                <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#ffffff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textTransform: 'uppercase' }}>
+                  {displayName.toUpperCase()}
                 </span>
                 <span style={{ fontSize: '0.72rem', color: '#94a3b8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   {displaySubtitle}
@@ -253,6 +259,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         {/* Top Navbar */}
         <header
+          className="app-header"
           style={{
             height: '64px',
             backgroundColor: '#ffffff',
@@ -312,21 +319,6 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
 
           {/* Right Top Header Actions */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-            {/* Session Indicator */}
-            <div
-              style={{
-                fontSize: '0.78rem',
-                color: 'var(--color-slate-600)',
-                backgroundColor: 'var(--color-slate-100)',
-                padding: '0.25rem 0.75rem',
-                borderRadius: 'var(--radius-full)',
-                fontWeight: 600,
-              }}
-              className="academic-session-pill"
-            >
-              Academic Session 2025–2026
-            </div>
-
             {/* Notification Bell Mockup */}
             <div
               style={{
@@ -373,8 +365,8 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
                   onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
                 >
                   <Avatar name={displayName} size="xs" roleBadge={role} />
-                  <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--color-slate-800)' }}>
-                    {displayName.split(' ')[0]}
+                  <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--color-slate-800)', textTransform: 'uppercase' }}>
+                    {displayName.toUpperCase()}
                   </span>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <polyline points="6 9 12 15 18 9" />
@@ -477,6 +469,23 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
           }
           .academic-session-pill {
             display: none !important;
+          }
+          main {
+            padding: 1rem 0.85rem !important;
+          }
+          footer {
+            padding: 1rem 0.85rem !important;
+            flex-direction: column !important;
+            text-align: center !important;
+            gap: 0.35rem !important;
+          }
+        }
+        @media (max-width: 600px) {
+          .app-header {
+            padding: 0 0.85rem !important;
+          }
+          main {
+            padding: 0.75rem 0.5rem !important;
           }
         }
         @media (min-width: 901px) {

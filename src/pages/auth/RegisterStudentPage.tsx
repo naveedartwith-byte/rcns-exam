@@ -258,6 +258,7 @@ export const RegisterStudentPage: React.FC = () => {
         ) : (
           /* Form Container Card */
           <div
+            className="student-register-card"
             style={{
               backgroundColor: '#ffffff',
               borderRadius: 'var(--radius-lg)',
@@ -280,7 +281,7 @@ export const RegisterStudentPage: React.FC = () => {
                 <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--color-slate-800)', borderBottom: '1px solid var(--color-slate-100)', paddingBottom: '0.5rem', marginBottom: '1rem' }}>
                   1. Personal Information
                 </h3>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '1rem' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
                   <Input
                     label="Full Name (As per Matric/FSc)"
                     placeholder="e.g. Muhammad Farhan"
@@ -307,7 +308,7 @@ export const RegisterStudentPage: React.FC = () => {
                   2. Academic Enrollment
                 </h3>
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '1rem' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
                   <Input
                     label="KMU Registration Number"
                     placeholder="e.g. 2026/KMU-RCNS/001"
@@ -359,7 +360,7 @@ export const RegisterStudentPage: React.FC = () => {
                     helperText={formData.batch ? 'Choose current academic semester' : 'Select Batch above to enable semester'}
                   />
 
-                  <div style={{ gridColumn: 'span 2' }}>
+                  <div style={{ gridColumn: '1 / -1' }}>
                     <Input
                       label="Assigned Department"
                       value={formData.department}
@@ -388,7 +389,7 @@ export const RegisterStudentPage: React.FC = () => {
                     requiredIndicator
                   />
 
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '1rem' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
                     <Input
                       label="Create Password"
                       type="password"
@@ -456,6 +457,14 @@ export const RegisterStudentPage: React.FC = () => {
           </div>
         )}
       </div>
+
+      <style>{`
+        @media (max-width: 600px) {
+          .student-register-card {
+            padding: 1.25rem 1rem !important;
+          }
+        }
+      `}</style>
     </div>
   );
 };

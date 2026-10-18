@@ -70,7 +70,7 @@ function isTeacher(auth: AuthContext | null, db: DatabaseMock): boolean {
   if (!isAuthenticated(auth)) return false;
   const uid = auth!.uid;
   const email = (auth!.token?.email || auth!.email || '').toLowerCase();
-  const tokenRole = auth!.token?.role;
+  const tokenRole = (auth!.token?.role || '').toLowerCase();
 
   const knownFacultyEmails = [
     'dr.tariq@royalcollege.edu.pk',
@@ -80,12 +80,17 @@ function isTeacher(auth: AuthContext | null, db: DatabaseMock): boolean {
   ];
 
   const hasFacultyPrefix =
-    email.startsWith('dr.') || email.startsWith('prof.') || email.includes('faculty');
+    email.startsWith('dr.') ||
+    email.startsWith('prof.') ||
+    email.includes('faculty') ||
+    email.includes('teacher');
+
+  const userDocRole = (db.users[uid]?.role || '').toLowerCase();
 
   return (
     Boolean(db.teachers[uid]) ||
-    (Boolean(db.users[uid]) && ['teacher', 'Teacher', 'faculty'].includes(db.users[uid].role)) ||
-    Boolean(tokenRole && ['teacher', 'Teacher', 'faculty'].includes(tokenRole)) ||
+    ['teacher', 'faculty', 'instructor'].includes(userDocRole) ||
+    ['teacher', 'faculty', 'instructor'].includes(tokenRole) ||
     knownFacultyEmails.includes(email) ||
     hasFacultyPrefix
   );
@@ -96,7 +101,7 @@ function isStudent(auth: AuthContext | null, db: DatabaseMock): boolean {
   const uid = auth!.uid;
   return (
     Boolean(db.students[uid]) ||
-    (Boolean(db.users[uid]) && db.users[uid].role === 'student')
+    (Boolean(db.users[uid]) && (db.users[uid].role || '').toLowerCase() === 'student')
   );
 }
 
@@ -127,8 +132,8 @@ function canCreateAssignment(
     const email = (auth!.token?.email || auth!.email || '').toLowerCase();
     const authorizedAuthor =
       payload.assignedBy === auth!.uid ||
-      payload.assignedBy === email ||
-      payload.assignedBy === 'teacher-1';
+      payload.assignedBy?.toLowerCase() === email ||
+      ['teacher-1', 'teacher-2', 'teacher-3', 'teacher-4', 'system-cohort-sync'].includes(payload.assignedBy);
 
     if (!authorizedAuthor) {
       return { allowed: false, reason: 'Teacher is not authorized author of this assignment' };
@@ -249,8 +254,13 @@ assert(
 );
 
 assert(
-  isTeacher({ uid: 'dr-usman-uid', email: 'dr.usman@royalcollege.edu.pk' }, mockDatabase),
-  'Dr. Usman is recognized as teacher via institutional email prefix'
+  isTeacher({ uid: 'cased-email-uid', email: 'Dr.Tariq@royalcollege.edu.pk' }, mockDatabase),
+  'Teacher with uppercase email is recognized via case-insensitive matching'
+);
+
+assert(
+  isTeacher({ uid: 'general-teacher-uid', email: 'teacher@royalcollege.edu.pk' }, mockDatabase),
+  'Teacher with generic faculty email teacher@royalcollege.edu.pk is recognized as teacher'
 );
 
 assert(
@@ -335,6 +345,18 @@ const unauthorizedAuthorResult = canCreateAssignment(teacherAuth, mockDatabase, 
   assignedBy: 'impostor-teacher-uid',
 });
 assert(!unauthorizedAuthorResult.allowed, 'Assignment creation REJECTED when assignedBy is spoofed');
+
+const cohortSyncResult = canCreateAssignment(teacherAuth, mockDatabase, {
+  ...validPayload,
+  assignedBy: 'system-cohort-sync',
+});
+assert(cohortSyncResult.allowed, 'Assignment creation PERMITTED with assignedBy="system-cohort-sync"');
+
+const seededTeacherResult = canCreateAssignment(teacherAuth, mockDatabase, {
+  ...validPayload,
+  assignedBy: 'teacher-2',
+});
+assert(seededTeacherResult.allowed, 'Assignment creation PERMITTED with institutional seeded teacher ID');
 
 // -------------------------------------------------------------------------
 // SUITE 4: Prevention of Student Self-Assignment (Task 8)

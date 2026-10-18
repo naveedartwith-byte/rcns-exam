@@ -35,6 +35,8 @@ export interface ExamDocument {
   startAt: any;
   endAt: any;
   status: 'draft' | 'scheduled' | 'active' | 'completed' | 'archived';
+  requiresSecretCode?: boolean;
+  sanitizedWrittenQuestions?: any[];
 }
 
 export interface StudentProfileDocument {
@@ -62,6 +64,7 @@ export interface GetStudentQuestionsResponse {
 export interface SubmitExamAttemptRequest {
   examId: string;
   answers: Record<string, string | number>;
+  writtenAnswers?: Record<string, any>;
 }
 
 export interface SubmitExamAttemptResponse {
@@ -74,6 +77,43 @@ export interface SubmitExamAttemptResponse {
   totalMarks: number;
   percentage: number;
   passed: boolean;
-  status: 'graded';
+  grade?: string;
+  status: 'graded' | 'pending';
   submittedAt: string;
+  mcqMarks?: number;
+  mcqTotalMarks?: number;
+  totalQuestions?: number;
+  totalMCQs?: number;
+  answeredMCQs?: number;
+  correctMCQs?: number;
+  incorrectMCQs?: number;
+  unansweredMCQs?: number;
+  totalObjectiveMarks?: number;
+  obtainedObjectiveMarks?: number;
+  totalWrittenQuestions?: number;
+  writtenAnsweredCount?: number;
+  writtenUnansweredCount?: number;
+  requiresWrittenGrading?: boolean;
+}
+
+export interface VerifyExamCodeRequest {
+  examId: string;
+  code: string;
+}
+
+export interface VerifyExamCodeResponse {
+  success: boolean;
+  examId: string;
+  verifiedAt: string;
+  attemptId: string;
+}
+
+export interface ExamSecretDocument {
+  examId: string;
+  code?: string;
+  codeHash: string;
+  salt: string;
+  createdBy?: string;
+  createdAt?: any;
+  updatedAt?: any;
 }

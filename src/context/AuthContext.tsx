@@ -32,27 +32,110 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       if (userDocSnap.exists()) {
         const uProfile = userDocSnap.data() as UserProfile;
-        setUserProfile(uProfile);
-        setRole(uProfile.role);
+        const rawRole = (uProfile.role || '').toLowerCase();
+        const normalizedRole: UserRole =
+          rawRole === 'faculty' ? 'teacher' : (rawRole as UserRole);
+
+        setUserProfile({ ...uProfile, role: normalizedRole });
+        setRole(normalizedRole);
         setCurrentUser(firebaseUser);
 
-        if (uProfile.role === 'student') {
+        if (normalizedRole === 'student') {
           const studentSnap = await getDoc(doc(db, 'students', uid));
           if (studentSnap.exists()) {
             setStudentProfile(studentSnap.data() as StudentProfile);
           }
-        } else if (uProfile.role === 'teacher') {
+        } else if (normalizedRole === 'teacher') {
           const teacherSnap = await getDoc(doc(db, 'teachers', uid));
           if (teacherSnap.exists()) {
             setTeacherProfile(teacherSnap.data() as TeacherProfile);
+          } else {
+            const facultyProfile: TeacherProfile = {
+              uid,
+              role: 'teacher',
+              name: uProfile.name || 'Faculty Member',
+              email: (firebaseUser.email || '').trim().toLowerCase(),
+              department: 'Nursing & Allied Health Sciences',
+              designation: 'Assistant Professor',
+              phone: '+92 300 9112233',
+              courses: ['Adult Health Nursing I', 'Pathophysiology'],
+              totalExams: 0,
+              status: 'active',
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            };
+            setTeacherProfile(facultyProfile);
+            try {
+              await setDoc(
+                doc(db, 'teachers', uid),
+                {
+                  ...facultyProfile,
+                  createdAt: serverTimestamp(),
+                  updatedAt: serverTimestamp(),
+                },
+                { merge: true }
+              );
+            } catch (syncErr) {
+              console.warn('Teacher document auto-provision note:', syncErr);
+            }
           }
-        } else if (uProfile.role === 'admin') {
+        } else if (normalizedRole === 'admin') {
           const adminSnap = await getDoc(doc(db, 'admins', uid));
+          const email = (firebaseUser.email || '').trim().toLowerCase();
+          const defaultAdminName =
+            email === 'naveedartwith@gmail.com' ? 'Super Administrator' : 'System Administrator';
+
           if (adminSnap.exists()) {
-            setAdminProfile(adminSnap.data() as AdminProfile);
+            const rawAdminData = adminSnap.data() as Record<string, any>;
+            const adminName =
+              rawAdminData.name ||
+              rawAdminData['name '] ||
+              (uProfile.name && uProfile.name.trim() ? uProfile.name : defaultAdminName);
+            const adminRole = rawAdminData.role || rawAdminData['role  '] || 'admin';
+
+            const adminProfileData: AdminProfile = {
+              uid,
+              role: adminRole,
+              name: adminName,
+              email: rawAdminData.email || firebaseUser.email || '',
+              department: rawAdminData.department || 'Examination & Institutional Administration',
+              status: rawAdminData.status || 'active',
+              createdAt: rawAdminData.createdAt || new Date().toISOString(),
+              updatedAt: rawAdminData.updatedAt || new Date().toISOString(),
+            };
+            setAdminProfile(adminProfileData);
+
+            if (!uProfile.name || !uProfile.name.trim()) {
+              setUserProfile({
+                ...uProfile,
+                name: adminName,
+                role: 'admin',
+              });
+            }
+          } else {
+            const adminName =
+              uProfile.name && uProfile.name.trim() ? uProfile.name : defaultAdminName;
+            const adminProfileData: AdminProfile = {
+              uid,
+              role: 'admin',
+              name: adminName,
+              email: firebaseUser.email || '',
+              department: 'Examination & Institutional Administration',
+              status: 'active',
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            };
+            setAdminProfile(adminProfileData);
+            if (!uProfile.name || !uProfile.name.trim()) {
+              setUserProfile({
+                ...uProfile,
+                name: adminName,
+                role: 'admin',
+              });
+            }
           }
         }
-        return uProfile.role;
+        return normalizedRole;
       } else {
         // Fallback: Check if teacher profile exists directly in teachers/{uid}
         const teacherSnap = await getDoc(doc(db, 'teachers', uid));
@@ -93,13 +176,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Fallback: Check if admin profile exists in admins/{uid}
         const adminSnap = await getDoc(doc(db, 'admins', uid));
         if (adminSnap.exists()) {
-          const aData = adminSnap.data() as AdminProfile;
+          const email = (firebaseUser.email || '').trim().toLowerCase();
+          const defaultAdminName =
+            email === 'naveedartwith@gmail.com' ? 'Super Administrator' : 'System Administrator';
+          const rawAdminData = adminSnap.data() as Record<string, any>;
+          const adminName =
+            rawAdminData.name ||
+            rawAdminData['name '] ||
+            defaultAdminName;
+          const adminRole = rawAdminData.role || rawAdminData['role  '] || 'admin';
+          const aData: AdminProfile = {
+            uid,
+            role: adminRole,
+            name: adminName,
+            email: rawAdminData.email || firebaseUser.email || '',
+            department: rawAdminData.department || 'Examination & Institutional Administration',
+            status: rawAdminData.status || 'active',
+            createdAt: rawAdminData.createdAt || new Date().toISOString(),
+            updatedAt: rawAdminData.updatedAt || new Date().toISOString(),
+          };
           setAdminProfile(aData);
           setRole('admin');
           setUserProfile({
             uid,
             role: 'admin',
-            name: aData.name,
+            name: adminName,
             email: aData.email,
             createdAt: aData.createdAt,
             updatedAt: aData.updatedAt,
@@ -108,9 +209,78 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           return 'admin';
         }
 
-        // Fallback for recognized institutional faculty: Initialize missing profile documents
+        // Fallback for Admin accounts: Initialize missing profile documents
         const email = (firebaseUser.email || '').trim().toLowerCase();
+        const isAdminEmail =
+          email === 'naveedartwith@gmail.com' ||
+          email === 'admin@royalcollege.edu.pk' ||
+          email.startsWith('admin@') ||
+          email.includes('admin');
+
+        if (isAdminEmail) {
+          const adminName =
+            (email === 'naveedartwith@gmail.com' ? 'Super Administrator' : null) ||
+            firebaseUser.displayName ||
+            'Super Administrator';
+          try {
+            await setDoc(
+              doc(db, 'users', uid),
+              {
+                uid,
+                role: 'admin',
+                name: adminName,
+                email: firebaseUser.email || '',
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+              },
+              { merge: true }
+            );
+
+            await setDoc(
+              doc(db, 'admins', uid),
+              {
+                uid,
+                role: 'admin',
+                name: adminName,
+                email: firebaseUser.email || '',
+                department: 'Examination & Institutional Administration',
+                status: 'active',
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+              },
+              { merge: true }
+            );
+          } catch (initErr) {
+            console.warn('Admin profile auto-provisioning note:', initErr);
+          }
+
+          const adminProfileData: AdminProfile = {
+            uid,
+            role: 'admin',
+            name: adminName,
+            email: firebaseUser.email || '',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+
+          setAdminProfile(adminProfileData);
+          setRole('admin');
+          setUserProfile({
+            uid,
+            role: 'admin',
+            name: adminName,
+            email: firebaseUser.email || '',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          });
+          setCurrentUser(firebaseUser);
+          return 'admin';
+        }
+
+        // Fallback for recognized institutional faculty: Initialize missing profile documents
         const isFaculty =
+          email.endsWith('@royalcollege.edu.pk') ||
+          email.endsWith('@rcns.edu.pk') ||
           email === 'dr.tariq@royalcollege.edu.pk' ||
           email === 'maryam.saeed@royalcollege.edu.pk' ||
           email === 'dr.usman@royalcollege.edu.pk' ||
@@ -194,16 +364,113 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setCurrentUser(firebaseUser);
           return 'teacher';
         }
+
+        // Fallback for student account
+        const studentName = firebaseUser.displayName || 'Student Candidate';
+        const studentProfileData: StudentProfile = {
+          uid,
+          role: 'student',
+          name: studentName,
+          fatherName: 'Candidate Father',
+          email: firebaseUser.email || '',
+          batch: 'Batch 13th',
+          semester: 'Semester 1',
+          program: 'BS Nursing (Generic)',
+          department: 'Nursing & Allied Health Sciences',
+          kmuRegistrationNo: '2026/KMU/RCNS/01',
+          status: 'active',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+
+        setStudentProfile(studentProfileData);
+        setRole('student');
+        setUserProfile({
+          uid,
+          role: 'student',
+          name: studentName,
+          email: firebaseUser.email || '',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+        setCurrentUser(firebaseUser);
+        return 'student';
       }
-      return null;
     } catch (error) {
       console.error('Error fetching user profile in AuthContext:', error);
-      return null;
+      // Safe fallback role based on institutional email
+      const email = (firebaseUser.email || '').trim().toLowerCase();
+      const fallbackRole: UserRole =
+        email === 'naveedartwith@gmail.com' || email.includes('admin')
+          ? 'admin'
+          : email.endsWith('@royalcollege.edu.pk') || email.includes('faculty') || email.includes('teacher')
+          ? 'teacher'
+          : 'student';
+      setRole(fallbackRole);
+      setCurrentUser(firebaseUser);
+      const fallbackName =
+        fallbackRole === 'admin'
+          ? (email === 'naveedartwith@gmail.com' ? 'Super Administrator' : 'System Administrator')
+          : (firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'Candidate');
+
+      setUserProfile((prev) => prev || {
+        uid: firebaseUser.uid,
+        role: fallbackRole,
+        name: fallbackName,
+        email: firebaseUser.email || '',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+      if (fallbackRole === 'admin') {
+        setAdminProfile((prev) => prev || {
+          uid: firebaseUser.uid,
+          role: 'admin',
+          name: fallbackName,
+          email: firebaseUser.email || '',
+          department: 'Examination & Institutional Administration',
+          status: 'active',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+      } else if (fallbackRole === 'student') {
+        setStudentProfile((prev) => prev || {
+          uid: firebaseUser.uid,
+          role: 'student',
+          name: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'Student Candidate',
+          fatherName: 'Candidate Father',
+          email: firebaseUser.email || '',
+          batch: 'Batch 13th',
+          semester: 'Semester 1',
+          program: 'BS Nursing (Generic)',
+          department: 'Nursing & Allied Health Sciences',
+          kmuRegistrationNo: '2026/KMU/RCNS/01',
+          status: 'active',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+      }
+      return fallbackRole;
     }
   };
 
   // Fetch role-specific profile when auth state changes
   useEffect(() => {
+    // Check if session is new from a closed browser tab (Security requirement #5)
+    const sessionActive = sessionStorage.getItem('rcns_browser_session_active');
+    if (!sessionActive) {
+      // Reopening after browser/tab close -> start from login page for examination security
+      authService.logout().catch(() => {});
+      sessionStorage.setItem('rcns_browser_session_active', '1');
+      setCurrentUser(null);
+      setUserProfile(null);
+      setStudentProfile(null);
+      setTeacherProfile(null);
+      setAdminProfile(null);
+      setRole(null);
+      setLoading(false);
+      return;
+    }
+
     const unsubscribe = authService.onAuthStateChanged(async (firebaseUser) => {
       setCurrentUser(firebaseUser);
 
@@ -217,6 +484,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return;
       }
 
+      sessionStorage.setItem('rcns_browser_session_active', '1');
       await fetchAndApplyUserProfile(firebaseUser);
       setLoading(false);
     });
@@ -229,7 +497,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const firebaseUser = await authService.login(email, password);
       const userRole = await fetchAndApplyUserProfile(firebaseUser);
-      return userRole || 'teacher';
+      const normalizedEmail = (email || '').trim().toLowerCase();
+      const isKnownAdmin =
+        normalizedEmail === 'naveedartwith@gmail.com' ||
+        normalizedEmail.includes('admin');
+      return userRole || (isKnownAdmin ? 'admin' : 'teacher');
     } finally {
       setLoading(false);
     }

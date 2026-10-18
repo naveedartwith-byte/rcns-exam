@@ -25,7 +25,7 @@ export const TeacherDashboardPage: React.FC = () => {
   const navigate = useNavigate();
 
   const teacherName = userProfile?.name || 'Faculty Examiner';
-  const department = teacherProfile?.department || 'Nursing & Allied Health Sciences';
+  const designation = teacherProfile?.designation || 'Associate Professor';
 
   const [teacherExams, setTeacherExams] = useState<Exam[]>([]);
   const [totalStudents, setTotalStudents] = useState<number>(0);
@@ -75,31 +75,28 @@ export const TeacherDashboardPage: React.FC = () => {
         }}
       >
         <div style={{ maxWidth: '640px' }}>
+          {/* Teacher Name in Upper Case without 'Welcome' (Requirements #1 & #2) */}
+          <h1 style={{ fontSize: '2rem', fontWeight: 800, color: '#ffffff', margin: '0 0 0.65rem 0', fontFamily: 'var(--font-heading)', textTransform: 'uppercase', letterSpacing: '0.02em' }}>
+            {teacherName.toUpperCase()}
+          </h1>
+
+          {/* Teacher Designation positioned directly under the name (Requirements #1 & #2) */}
           <div
             style={{
               display: 'inline-flex',
               alignItems: 'center',
-              gap: '0.4rem',
-              padding: '0.2rem 0.65rem',
+              gap: '0.5rem',
+              padding: '0.3rem 0.85rem',
               borderRadius: 'var(--radius-full)',
               backgroundColor: 'rgba(255, 255, 255, 0.15)',
-              fontSize: '0.78rem',
+              fontSize: '0.825rem',
               fontWeight: 600,
-              marginBottom: '0.75rem',
             }}
           >
-            <span>Department: {department}</span>
+            <span style={{ color: '#fef08a' }}>{designation}</span>
             <span>•</span>
             <span>Faculty &amp; Examiner Portal</span>
           </div>
-
-          <h1 style={{ fontSize: '1.85rem', fontWeight: 800, color: '#ffffff', margin: 0, fontFamily: 'var(--font-heading)' }}>
-            Welcome, {teacherName}
-          </h1>
-
-          <p style={{ fontSize: '0.95rem', color: '#e2e8f0', marginTop: '0.4rem', lineHeight: 1.5 }}>
-            You have <strong style={{ color: '#fde68a' }}>{activeExams.length} active examination</strong> currently live for candidate submissions across Nursing &amp; Health Sciences.
-          </p>
         </div>
 
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>

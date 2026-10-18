@@ -13,6 +13,22 @@ import {
 import { db } from '../firebase/firestore';
 import type { Exam } from '../types/exam';
 
+function sortExamsNewestFirst(exams: Exam[]): Exam[] {
+  return exams.sort((a, b) => {
+    const parseTime = (val: any) => {
+      if (!val) return 0;
+      if (typeof val === 'number') return val;
+      if (typeof val?.toMillis === 'function') return val.toMillis();
+      if (typeof val?.toDate === 'function') return val.toDate().getTime();
+      const d = new Date(val).getTime();
+      return isNaN(d) ? 0 : d;
+    };
+    const timeA = parseTime(a.createdAt || a.updatedAt || a.startAt);
+    const timeB = parseTime(b.createdAt || b.updatedAt || b.startAt);
+    return timeB - timeA;
+  });
+}
+
 export const examService = {
   /**
    * Retrieves an exam by ID.
@@ -27,16 +43,17 @@ export const examService = {
   },
 
   /**
-   * Retrieves all exams across the institution.
+   * Retrieves all exams across the institution, sorted newest first.
    */
   async getAllExams(): Promise<Exam[]> {
     const examsCol = collection(db, 'exams');
     const snapshot = await getDocs(examsCol);
-    return snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Exam));
+    const list = snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Exam));
+    return sortExamsNewestFirst(list);
   },
 
   /**
-   * Retrieves exams created by a specific teacher.
+   * Retrieves exams created by a specific teacher, sorted newest first.
    * If Dr. Tariq or demo faculty, also safely includes initial seeded exams authored by 'teacher-1'.
    */
   async getExamsByTeacher(teacherId: string, email?: string): Promise<Exam[]> {
@@ -53,18 +70,18 @@ export const examService = {
           const seededExams = seededSnap.docs
             .map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Exam))
             .filter((se) => !exams.some((e) => e.id === se.id));
-          return [...exams, ...seededExams];
+          return sortExamsNewestFirst([...exams, ...seededExams]);
         } catch (seededErr) {
           console.warn('Seeded exams retrieval note:', seededErr);
         }
       }
     }
-    return exams;
+    return sortExamsNewestFirst(exams);
   },
 
 
   /**
-   * Retrieves exams for a specific program and semester.
+   * Retrieves exams for a specific program and semester, sorted newest first.
    */
   async getExamsByProgramAndSemester(program: string, semester: string): Promise<Exam[]> {
     const examsCol = collection(db, 'exams');
@@ -74,7 +91,8 @@ export const examService = {
       where('semester', '==', semester)
     );
     const snapshot = await getDocs(q);
-    return snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Exam));
+    const list = snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Exam));
+    return sortExamsNewestFirst(list);
   },
 
   /**

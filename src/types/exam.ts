@@ -22,6 +22,9 @@ export interface Exam {
   passingMarks?: number;
   questionCount?: number;
   mcqDefaultMarks?: number;
+  requiresSecretCode?: boolean;
+  codeSalt?: string;
+  codeHash?: string;
   instructions?: string;
   sanitizedQuestions?: StudentQuestion[];
   sanitizedWrittenQuestions?: StudentWrittenQuestion[];

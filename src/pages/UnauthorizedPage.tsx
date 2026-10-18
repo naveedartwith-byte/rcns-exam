@@ -5,7 +5,7 @@ import { getDefaultDashboardRoute } from '../utils/permissions';
 import { Logo, Button } from '../components/ui';
 
 export const UnauthorizedPage: React.FC = () => {
-  const { role } = useAuth();
+  const { role, logout } = useAuth();
   const returnRoute = getDefaultDashboardRoute(role);
 
   return (
@@ -63,16 +63,25 @@ export const UnauthorizedPage: React.FC = () => {
           </p>
 
           <div style={{ marginTop: '2rem', display: 'flex', justifyContent: 'center', gap: '1rem', flexWrap: 'wrap' }}>
-            <Link to={returnRoute} style={{ textDecoration: 'none' }}>
+            <Link to={returnRoute || '/login'} style={{ textDecoration: 'none' }}>
               <Button variant="primary" size="md" style={{ backgroundColor: '#0f2744' }}>
                 Return to Your Dashboard
               </Button>
             </Link>
-            <Link to="/login" style={{ textDecoration: 'none' }}>
-              <Button variant="outline" size="md">
-                Switch Account
-              </Button>
-            </Link>
+            <Button
+              variant="outline"
+              size="md"
+              onClick={async () => {
+                try {
+                  await logout();
+                } catch {
+                  // ignore
+                }
+                window.location.href = '/login';
+              }}
+            >
+              Switch Account
+            </Button>
           </div>
         </div>
 

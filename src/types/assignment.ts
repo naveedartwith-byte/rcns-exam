@@ -26,4 +26,12 @@ export interface Assignment {
   startedAt?: Timestamp | string;
   submittedAt?: Timestamp | string;
   gradedAt?: Timestamp | string;
+  currentQuestionIndex?: number;
+  timeLeftSeconds?: number;
+  activeExamSection?: 'mcq' | 'written';
+  flaggedQuestions?: number[];
+  tabSwitchCount?: number;
+  codeVerified?: boolean;
+  codeVerifiedAt?: Timestamp | string;
+  attemptId?: string;
 }

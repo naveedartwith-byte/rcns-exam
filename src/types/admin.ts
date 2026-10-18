@@ -6,6 +6,8 @@ export interface AdminProfile {
   role: Extract<UserRole, 'admin'>;
   name: string;
   email: string;
+  department?: string;
+  status?: 'active' | 'inactive' | string;
   createdAt: Timestamp | string;
   updatedAt: Timestamp | string;
 }

@@ -92,15 +92,43 @@ export const StudentDashboardPage: React.FC = () => {
     return () => clearInterval(timer);
   }, []);
 
-  // Filter quizzes and exams by dynamic effective status
-  const activeExams = exams.filter((e) => getEffectiveExamStatus(e) === 'active');
-  const upcomingExams = exams.filter((e) => getEffectiveExamStatus(e) === 'scheduled');
-  const completedResults = results.slice(0, 5);
+  // Helper to parse dates/timestamps safely for sorting
+  const parseTime = (val: any) => {
+    if (!val) return 0;
+    if (typeof val === 'number') return val;
+    if (typeof val?.toMillis === 'function') return val.toMillis();
+    if (typeof val?.toDate === 'function') return val.toDate().getTime();
+    const d = new Date(val).getTime();
+    return isNaN(d) ? 0 : d;
+  };
+
+  // Filter quizzes and exams by dynamic effective status, sorting newest first (Requirement #9)
+  const sortedExams = [...exams].sort((a, b) => {
+    const timeA = parseTime((a as any).assignedAt || a.createdAt || a.updatedAt || a.startAt);
+    const timeB = parseTime((b as any).assignedAt || b.createdAt || b.updatedAt || b.startAt);
+    return timeB - timeA;
+  });
+
+  const activeExams = sortedExams.filter((e) => getEffectiveExamStatus(e) === 'active');
+  const upcomingExams = sortedExams.filter((e) => getEffectiveExamStatus(e) === 'scheduled');
+
+  const sortedResults = [...results].sort((a, b) => {
+    const timeA = parseTime(a.submittedAt || a.evaluatedAt || (a as any).createdAt);
+    const timeB = parseTime(b.submittedAt || b.evaluatedAt || (b as any).createdAt);
+    return timeB - timeA;
+  });
+  const completedResults = sortedResults.slice(0, 5);
   const totalAssigned = exams.length;
-  const avgPercentage =
-    results.length > 0
-      ? Math.round(results.reduce((acc, r) => acc + (r.percentage || 0), 0) / results.length)
-      : 85;
+
+  // Accurate percentage calculated across all evaluated quizzes & exams (Requirement #8)
+  const gradedResults = results.filter((r) => r.status === 'graded' || (r.percentage !== undefined && r.percentage !== null));
+  const totalMarksObtained = gradedResults.reduce((acc, r) => acc + (Number(r.marks) || 0), 0);
+  const totalMaxMarks = gradedResults.reduce((acc, r) => acc + (Number(r.totalMarks) || 0), 0);
+  const accuratePercentage = totalMaxMarks > 0
+    ? ((totalMarksObtained / totalMaxMarks) * 100).toFixed(1)
+    : gradedResults.length > 0
+    ? (gradedResults.reduce((acc, r) => acc + (Number(r.percentage) || 0), 0) / gradedResults.length).toFixed(1)
+    : '0.0';
 
   if (loading) {
     return <LoadingSpinner text="Loading candidate examination portal..." fullScreen />;
@@ -126,18 +154,23 @@ export const StudentDashboardPage: React.FC = () => {
         }}
       >
         <div style={{ zIndex: 1, maxWidth: '640px' }}>
+          {/* Candidate Name in Uppercase without 'Welcome back' (Requirements #2 & #5) */}
+          <h1 style={{ fontSize: '2rem', fontWeight: 800, color: '#ffffff', margin: '0 0 0.65rem 0', fontFamily: 'var(--font-heading)', textTransform: 'uppercase', letterSpacing: '0.02em' }}>
+            {studentName.toUpperCase()}
+          </h1>
+
+          {/* Academic ID badge positioned BELOW the name (Requirement #3) */}
           <div
             style={{
               display: 'inline-flex',
               alignItems: 'center',
               flexWrap: 'wrap',
               gap: '0.4rem',
-              padding: '0.25rem 0.75rem',
+              padding: '0.3rem 0.85rem',
               borderRadius: 'var(--radius-full)',
               backgroundColor: 'rgba(255, 255, 255, 0.15)',
-              fontSize: '0.8rem',
+              fontSize: '0.825rem',
               fontWeight: 600,
-              marginBottom: '0.75rem',
             }}
           >
             <span>KMU ID: {kmuReg}</span>
@@ -146,19 +179,6 @@ export const StudentDashboardPage: React.FC = () => {
             <span>•</span>
             <span>{semester}</span>
           </div>
-
-          <h1 style={{ fontSize: '1.85rem', fontWeight: 800, color: '#ffffff', margin: 0, fontFamily: 'var(--font-heading)' }}>
-            Welcome back, {studentName}
-          </h1>
-
-          <p style={{ fontSize: '0.95rem', color: '#e2e8f0', marginTop: '0.4rem', lineHeight: 1.5 }}>
-            Enrolled in <strong>{program}</strong> at ROYAL COLLEGE OF NURSING SWAT.
-            {activeExams.length > 0 ? (
-              <span> You have <strong style={{ color: '#fde68a' }}>{activeExams.length} active quiz/exam</strong> ready to attempt.</span>
-            ) : (
-              <span> You have <strong style={{ color: '#fde68a' }}>{upcomingExams.length} upcoming scheduled quiz(zes)</strong>.</span>
-            )}
-          </p>
         </div>
 
         <div style={{ zIndex: 1, display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
@@ -232,9 +252,9 @@ export const StudentDashboardPage: React.FC = () => {
         />
 
         <StatCard
-          title="Academic Performance"
-          value={`${avgPercentage}%`}
-          subtitle="Average Exam Score"
+          title="Percentage"
+          value={`${accuratePercentage}%`}
+          subtitle="Evaluated score across quizzes"
           variant="gold"
           trend={{ value: 'KMU Standard Passing', isPositive: true }}
           icon={
@@ -549,7 +569,7 @@ export const StudentDashboardPage: React.FC = () => {
             <div
               style={{
                 display: 'grid',
-                gridTemplateColumns: 'repeat(3, 1fr)',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))',
                 gap: '1rem',
                 textAlign: 'center',
               }}

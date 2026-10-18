@@ -30,9 +30,11 @@ import { examService } from '../../services/examService';
 import { questionService } from '../../services/questionService';
 import { assignmentService } from '../../services/assignmentService';
 import { resultService } from '../../services/resultService';
+import { examCodeService, normalizeExamCode } from '../../services/examCodeService';
 import { BulkMcqImportModal } from '../../components/teacher/BulkMcqImportModal';
 import { WrittenQuestionManagerModal } from '../../components/teacher/WrittenQuestionManagerModal';
 import { WrittenAnswerEvaluationModal } from '../../components/teacher/WrittenAnswerEvaluationModal';
+import { gradeExamSubmission } from '../../utils/secureGrading';
 import {
   formatPakistanDateTime,
   toDatetimeLocalPktString,
@@ -52,7 +54,13 @@ export const TeacherExamsPage: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
 
-  // Load teacher's exams
+  // Secret Codes mapping and state for teacher inspection
+  const [examSecretsMap, setExamSecretsMap] = useState<Record<string, string>>({});
+  const [revealedCodes, setRevealedCodes] = useState<Record<string, boolean>>({});
+  const [copiedCodeId, setCopiedCodeId] = useState<string | null>(null);
+  const [showFormSecretCode, setShowFormSecretCode] = useState(false);
+
+  // Load teacher's exams and their associated secret codes
   const fetchTeacherExams = async () => {
     try {
       if (currentUser) {
@@ -63,6 +71,25 @@ export const TeacherExamsPage: React.FC = () => {
           status: getEffectiveExamStatus(e),
         }));
         setExams(withStatus);
+
+        // Load secret codes for authorized faculty inspection and auto-sync Spark verification tokens
+        const secretPromises = fetched.map(async (e) => {
+          try {
+            const sec = await examCodeService.getExamSecret(e.id);
+            if (sec?.salt && sec?.codeHash && (!e.codeHash || !e.codeSalt)) {
+              await examCodeService.syncExamVerificationToken(e.id, sec.salt, sec.codeHash);
+            }
+            return { examId: e.id, code: sec?.code || '' };
+          } catch {
+            return { examId: e.id, code: '' };
+          }
+        });
+        const secrets = await Promise.all(secretPromises);
+        const map: Record<string, string> = {};
+        secrets.forEach((s) => {
+          if (s.code) map[s.examId] = s.code;
+        });
+        setExamSecretsMap(map);
       }
     } catch (err) {
       console.error('Error fetching teacher exams:', err);
@@ -93,6 +120,7 @@ export const TeacherExamsPage: React.FC = () => {
     description: '',
     instructions: 'Please answer all multiple choice questions. Zero tolerance for unfair means.',
     status: 'draft' as 'draft' | 'scheduled' | 'active' | 'completed' | 'archived',
+    secretCode: examCodeService.generateRandomCode(),
   });
 
   // Dedicated Cohort Assignment Modal State (ISSUE 2)
@@ -135,6 +163,8 @@ export const TeacherExamsPage: React.FC = () => {
   const [selectedExamForGrading, setSelectedExamForGrading] = useState<Exam | null>(null);
   const [examSubmissions, setExamSubmissions] = useState<any[]>([]);
   const [examResults, setExamResults] = useState<Result[]>([]);
+  const [examCandidateRoster, setExamCandidateRoster] = useState<any[]>([]);
+  const [proctorModalTab, setProctorModalTab] = useState<'submissions' | 'active_candidates'>('submissions');
   const [isGradingLoading, setIsGradingLoading] = useState(false);
   const [gradingNotice, setGradingNotice] = useState<string | null>(null);
 
@@ -177,6 +207,7 @@ export const TeacherExamsPage: React.FC = () => {
       description: '',
       instructions: 'Please answer all multiple choice questions. Zero tolerance for unfair means.',
       status: 'scheduled',
+      secretCode: examCodeService.generateRandomCode(),
     });
     setIsExamModalOpen(true);
   };
@@ -187,6 +218,16 @@ export const TeacherExamsPage: React.FC = () => {
 
     const startLocal = toDatetimeLocalPktString(exam.startAt);
     const endLocal = toDatetimeLocalPktString(exam.endAt);
+
+    let existingCode = examSecretsMap[exam.id] || '';
+    if (!existingCode) {
+      examCodeService.getExamSecret(exam.id).then((sec) => {
+        if (sec?.code) {
+          setExamSecretsMap((prev) => ({ ...prev, [exam.id]: sec.code }));
+          setExamForm((prev) => ({ ...prev, secretCode: sec.code }));
+        }
+      }).catch(() => {});
+    }
 
     setExamForm({
       title: exam.title,
@@ -203,6 +244,7 @@ export const TeacherExamsPage: React.FC = () => {
       description: exam.description || '',
       instructions: exam.instructions || 'Please answer all questions carefully.',
       status: exam.status,
+      secretCode: existingCode || examCodeService.generateRandomCode(),
     });
     setIsExamModalOpen(true);
   };
@@ -243,21 +285,37 @@ export const TeacherExamsPage: React.FC = () => {
       return;
     }
 
+    // Validate secret code (Requirements #1, #7)
+    const codeValidation = examCodeService.validateCodeFormat(examForm.secretCode);
+    if (!codeValidation.valid) {
+      setExamModalError(codeValidation.error || 'Please enter a valid Secret Exam Code.');
+      return;
+    }
+
     // Convert local PKT inputs to explicit ISO strings (+05:00)
     const startIso = fromDatetimeLocalToPktIso(examForm.startAt);
     const endIso = fromDatetimeLocalToPktIso(examForm.endAt);
+
+    // Separate secretCode from public exam document payload
+    const { secretCode, ...examPayload } = examForm;
 
     try {
       if (editingExam) {
         // Update in Firestore
         await examService.updateExam(editingExam.id, {
-          ...examForm,
+          ...examPayload,
+          requiresSecretCode: true,
           startAt: startIso,
           endAt: endIso,
           duration: Number(examForm.duration),
           totalMarks: Number(examForm.totalMarks),
           passingMarks: Number(examForm.passingMarks),
         });
+
+        // Save secret code in protected examSecrets collection
+        await examCodeService.saveExamSecret(editingExam.id, secretCode, currentUser.uid);
+        setExamSecretsMap((prev) => ({ ...prev, [editingExam.id]: normalizeExamCode(secretCode) }));
+
         // Automatically assign/sync cohort if status is scheduled or active
         if (examForm.status === 'scheduled' || examForm.status === 'active') {
           await assignmentService.assignExamToCohort({
@@ -269,11 +327,12 @@ export const TeacherExamsPage: React.FC = () => {
           });
         }
 
-        setNotification({ type: 'success', text: `Exam "${examForm.title}" updated successfully with Pakistan Standard Time schedule!` });
+        setNotification({ type: 'success', text: `Exam "${examForm.title}" updated successfully with Secret Code saved!` });
       } else {
         // Create in Firestore
         const newExamId = await examService.createExam({
-          ...examForm,
+          ...examPayload,
+          requiresSecretCode: true,
           startAt: startIso,
           endAt: endIso,
           teacherId: currentUser.uid,
@@ -283,6 +342,10 @@ export const TeacherExamsPage: React.FC = () => {
           passingMarks: Number(examForm.passingMarks),
           questionCount: 0,
         });
+
+        // Save secret code in protected examSecrets collection
+        await examCodeService.saveExamSecret(newExamId, secretCode, currentUser.uid);
+        setExamSecretsMap((prev) => ({ ...prev, [newExamId]: normalizeExamCode(secretCode) }));
 
         // Automatically assign cohort if status is scheduled or active
         if (examForm.status === 'scheduled' || examForm.status === 'active') {
@@ -295,7 +358,7 @@ export const TeacherExamsPage: React.FC = () => {
           });
         }
 
-        setNotification({ type: 'success', text: `New exam "${examForm.title}" created and scheduled for ${examForm.batch}!` });
+        setNotification({ type: 'success', text: `New exam "${examForm.title}" created with Secret Code protected!` });
       }
 
       fetchTeacherExams();
@@ -364,17 +427,36 @@ export const TeacherExamsPage: React.FC = () => {
     }
   };
 
-  const handleOpenGradingModal = async (exam: Exam) => {
+  const handleOpenGradingModal = async (
+    exam: Exam,
+    defaultTab: 'submissions' | 'active_candidates' = 'submissions'
+  ) => {
     setSelectedExamForGrading(exam);
+    setProctorModalTab(defaultTab);
     setIsGradingLoading(true);
     setGradingNotice(null);
     try {
-      const [submissions, results] = await Promise.all([
+      const [submissions, results, roster, masterMCQs] = await Promise.all([
         resultService.getPendingSubmissionsForExam(exam.id),
         resultService.getResultsByExamId(exam.id),
+        assignmentService.getExamCandidateRoster(exam.id),
+        questionService.getQuestionsByExamId(exam.id).catch(() => []),
       ]);
+
+      if (masterMCQs && masterMCQs.length > 0) {
+        submissions.forEach((sub: any) => {
+          if (sub.answers && typeof sub.answers === 'object') {
+            const graded = gradeExamSubmission(masterMCQs, sub.answers, exam.passingMarks);
+            sub.mcqMarks = graded.obtainedMarks;
+            sub.mcqTotalMarks = graded.totalMarks;
+            sub.mcqCorrectCount = graded.correctCount;
+          }
+        });
+      }
+
       setExamSubmissions(submissions);
       setExamResults(results);
+      setExamCandidateRoster(roster);
     } catch (err) {
       console.error('Error loading submissions for exam:', err);
     } finally {
@@ -391,34 +473,12 @@ export const TeacherExamsPage: React.FC = () => {
         currentUser?.uid
       );
       setGradingNotice(`Successfully evaluated & recorded ${outcome.gradedCount} candidate result(s)!`);
-      const [submissions, results] = await Promise.all([
-        resultService.getPendingSubmissionsForExam(selectedExamForGrading.id),
-        resultService.getResultsByExamId(selectedExamForGrading.id),
-      ]);
-      setExamSubmissions(submissions);
-      setExamResults(results);
+      await handleOpenGradingModal(selectedExamForGrading);
     } catch (err: any) {
       console.error('Error grading submissions:', err);
       setGradingNotice(`Grading notice: ${err?.message || 'Error occurred during grading.'}`);
     } finally {
       setIsGradingLoading(false);
-    }
-  };
-
-  const handleDuplicateExam = async (exam: Exam) => {
-    if (!currentUser) return;
-    try {
-      await examService.createExam({
-        ...exam,
-        title: `${exam.title} (Copy)`,
-        status: 'draft',
-        teacherId: currentUser.uid,
-        teacherName: userProfile?.name || 'Faculty Member',
-      });
-      setNotification({ type: 'success', text: `Exam duplicated successfully as a Draft!` });
-      fetchTeacherExams();
-    } catch (err) {
-      console.error('Error duplicating exam:', err);
     }
   };
 
@@ -638,6 +698,7 @@ export const TeacherExamsPage: React.FC = () => {
                   <TableHead>Schedule (PKT)</TableHead>
                   <TableHead>Duration &amp; Marks</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead>Secret Code</TableHead>
                   <TableHead style={{ textAlign: 'right' }}>Actions</TableHead>
                 </TableRow>
               </TableHeader>
@@ -695,6 +756,65 @@ export const TeacherExamsPage: React.FC = () => {
                       </Badge>
                     </TableCell>
 
+                    <TableCell>
+                      {examSecretsMap[exam.id] ? (
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                          <code
+                            style={{
+                              backgroundColor: '#f1f5f9',
+                              padding: '0.2rem 0.45rem',
+                              borderRadius: '4px',
+                              fontFamily: 'monospace',
+                              fontWeight: 700,
+                              color: '#0f172a',
+                              letterSpacing: revealedCodes[exam.id] ? '0.05em' : '0.15em',
+                              fontSize: '0.85rem',
+                            }}
+                          >
+                            {revealedCodes[exam.id] ? examSecretsMap[exam.id] : '••••••••'}
+                          </code>
+                          <button
+                            type="button"
+                            onClick={() => setRevealedCodes((prev) => ({ ...prev, [exam.id]: !prev[exam.id] }))}
+                            title={revealedCodes[exam.id] ? 'Hide Secret Code' : 'Reveal Secret Code'}
+                            style={{
+                              background: 'none',
+                              border: 'none',
+                              cursor: 'pointer',
+                              padding: '2px',
+                              fontSize: '0.85rem',
+                            }}
+                          >
+                            {revealedCodes[exam.id] ? '🙈' : '👁️'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(examSecretsMap[exam.id]);
+                              setCopiedCodeId(exam.id);
+                              setTimeout(() => setCopiedCodeId(null), 2000);
+                            }}
+                            title="Copy Secret Exam Code to clipboard"
+                            style={{
+                              background: 'none',
+                              border: 'none',
+                              cursor: 'pointer',
+                              padding: '2px',
+                              fontSize: '0.85rem',
+                            }}
+                          >
+                            {copiedCodeId === exam.id ? '✅' : '📋'}
+                          </button>
+                        </div>
+                      ) : exam.requiresSecretCode ? (
+                        <span style={{ fontSize: '0.78rem', color: '#94a3b8', fontStyle: 'italic' }}>
+                          🔒 Protected
+                        </span>
+                      ) : (
+                        <span style={{ fontSize: '0.78rem', color: '#cbd5e1' }}>None</span>
+                      )}
+                    </TableCell>
+
                     <TableCell style={{ textAlign: 'right' }}>
                       <div style={{ display: 'inline-flex', gap: '0.4rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                         <Button
@@ -727,24 +847,26 @@ export const TeacherExamsPage: React.FC = () => {
                           Written Qs ({exam.writtenQuestionCount || (exam.sanitizedWrittenQuestions ? exam.sanitizedWrittenQuestions.length : 0)})
                         </Button>
 
+                        {exam.status === 'active' && (
+                          <Button
+                            variant="primary"
+                            size="sm"
+                            onClick={() => handleOpenGradingModal(exam, 'active_candidates')}
+                            style={{ backgroundColor: '#0284c7', borderColor: '#0284c7', fontWeight: 700 }}
+                            title="Inspect active candidates taking this examination right now"
+                          >
+                            👁️ Inspect Active
+                          </Button>
+                        )}
+
                         <Button
                           variant="secondary"
                           size="sm"
-                          onClick={() => handleOpenGradingModal(exam)}
+                          onClick={() => handleOpenGradingModal(exam, 'submissions')}
                           style={{ backgroundColor: '#059669', color: '#ffffff', borderColor: '#059669', fontWeight: 600 }}
                           title="Review Candidate Submissions & Run Grading"
                         >
                           📋 Submissions
-                        </Button>
-
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleOpenBulkImport(exam)}
-                          style={{ borderColor: '#0f2744', color: '#0f2744', fontWeight: 600 }}
-                          title="Bulk Import MCQs from Text"
-                        >
-                          ⚡ Import
                         </Button>
 
                         <Button
@@ -753,15 +875,6 @@ export const TeacherExamsPage: React.FC = () => {
                           onClick={() => handleOpenEditModal(exam)}
                         >
                           Edit
-                        </Button>
-
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleDuplicateExam(exam)}
-                          title="Duplicate Exam"
-                        >
-                          Copy
                         </Button>
 
                         <Button
@@ -1146,9 +1259,101 @@ export const TeacherExamsPage: React.FC = () => {
                 Duration: {examForm.duration} Mins
               </Badge>
             </div>
+
+            {/* Section 4: Secret Examination Code (Requirements #1, #7) */}
+            <div
+              style={{
+                marginTop: '1.25rem',
+                padding: '1.1rem',
+                borderRadius: 'var(--radius-md)',
+                backgroundColor: '#f8fafc',
+                border: '1.5px solid #cbd5e1',
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  marginBottom: '0.5rem',
+                  flexWrap: 'wrap',
+                  gap: '0.5rem',
+                }}
+              >
+                <div>
+                  <span style={{ fontWeight: 700, color: 'var(--color-slate-900)', fontSize: '0.95rem' }}>
+                    🔐 Secret Exam Code
+                  </span>
+                  <span style={{ color: 'var(--color-danger)', marginLeft: '4px', fontWeight: 700 }}>*</span>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--color-slate-500)', marginTop: '2px' }}>
+                    All assigned students must enter this exact code to unlock and start this examination.
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() =>
+                    setExamForm((prev) => ({
+                      ...prev,
+                      secretCode: examCodeService.generateRandomCode(),
+                    }))
+                  }
+                  style={{
+                    fontSize: '0.8rem',
+                    fontWeight: 600,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    borderColor: '#94a3b8',
+                  }}
+                >
+                  ⚡ Generate Random Code
+                </Button>
+              </div>
+
+              <div style={{ position: 'relative', marginTop: '0.75rem' }}>
+                <Input
+                  label="Exam Passcode (Shared across all assigned students for this exam)"
+                  type={showFormSecretCode ? 'text' : 'password'}
+                  value={examForm.secretCode}
+                  onChange={(e) =>
+                    setExamForm({ ...examForm, secretCode: e.target.value.toUpperCase() })
+                  }
+                  placeholder="e.g. RCNS-7K9A"
+                  required
+                  requiredIndicator
+                  helperText="Format: 4 to 16 alphanumeric characters (e.g. RCNS-XXXX). Only teachers and admins can view/change this."
+                  style={{
+                    fontFamily: 'monospace',
+                    letterSpacing: showFormSecretCode ? '0.05em' : '0.2em',
+                    fontWeight: 700,
+                    paddingRight: '3rem',
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowFormSecretCode(!showFormSecretCode)}
+                  style={{
+                    position: 'absolute',
+                    right: '12px',
+                    top: '32px',
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    fontSize: '1rem',
+                    padding: '4px',
+                    color: '#64748b',
+                  }}
+                  title={showFormSecretCode ? 'Hide Passcode' : 'Reveal Passcode'}
+                >
+                  {showFormSecretCode ? '🙈' : '👁️'}
+                </button>
+              </div>
+            </div>
           </div>
 
-          {/* Section 4: Instructions */}
+          {/* Section 5: Instructions */}
           <div>
             <Textarea
               label="Examination Instructions & Candidate Guidelines"
@@ -1471,6 +1676,64 @@ export const TeacherExamsPage: React.FC = () => {
           }
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+            {/* Modal Sub-Tabs: Submissions vs Live Active Candidates Proctoring */}
+            {(() => {
+              const activeCandidates = examCandidateRoster.filter((r) => r.status === 'started');
+              return (
+                <div
+                  style={{
+                    display: 'flex',
+                    gap: '0.5rem',
+                    backgroundColor: 'var(--color-slate-100)',
+                    padding: '0.35rem',
+                    borderRadius: 'var(--radius-md)',
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setProctorModalTab('submissions')}
+                    style={{
+                      flex: 1,
+                      padding: '0.6rem 1rem',
+                      borderRadius: 'var(--radius-sm)',
+                      border: 'none',
+                      backgroundColor: proctorModalTab === 'submissions' ? '#ffffff' : 'transparent',
+                      fontWeight: proctorModalTab === 'submissions' ? 800 : 600,
+                      color: proctorModalTab === 'submissions' ? '#0f2744' : 'var(--color-slate-600)',
+                      boxShadow: proctorModalTab === 'submissions' ? 'var(--shadow-xs)' : 'none',
+                      cursor: 'pointer',
+                      fontSize: '0.875rem',
+                    }}
+                  >
+                    📋 Submissions &amp; Results ({examSubmissions.length + examResults.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setProctorModalTab('active_candidates')}
+                    style={{
+                      flex: 1,
+                      padding: '0.6rem 1rem',
+                      borderRadius: 'var(--radius-sm)',
+                      border: 'none',
+                      backgroundColor: proctorModalTab === 'active_candidates' ? '#ffffff' : 'transparent',
+                      fontWeight: proctorModalTab === 'active_candidates' ? 800 : 600,
+                      color: proctorModalTab === 'active_candidates' ? '#0f2744' : 'var(--color-slate-600)',
+                      boxShadow: proctorModalTab === 'active_candidates' ? 'var(--shadow-xs)' : 'none',
+                      cursor: 'pointer',
+                      fontSize: '0.875rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '0.5rem',
+                    }}
+                  >
+                    <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#10b981', display: 'inline-block' }} />
+                    👁️ Inspect Active Students ({activeCandidates.length} Active Now)
+                  </button>
+                </div>
+              );
+            })()}
+
             {gradingNotice && (
               <Alert type="success" onDismiss={() => setGradingNotice(null)}>
                 {gradingNotice}
@@ -1480,9 +1743,98 @@ export const TeacherExamsPage: React.FC = () => {
             {isGradingLoading ? (
               <div style={{ padding: '2rem', textAlign: 'center' }}>
                 <div style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--color-slate-700)' }}>
-                  Processing candidate grading...
+                  Processing candidate data...
                 </div>
               </div>
+            ) : proctorModalTab === 'active_candidates' ? (
+              /* Live Proctoring & Active Candidates Inspection (Requirement #7) */
+              (() => {
+                const activeCandidates = examCandidateRoster.filter((r) => r.status === 'started');
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        padding: '0.85rem 1.25rem',
+                        backgroundColor: '#ecfdf5',
+                        border: '1px solid #a7f3d0',
+                        borderRadius: 'var(--radius-md)',
+                        flexWrap: 'wrap',
+                        gap: '0.5rem',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                        <span style={{ width: '12px', height: '12px', borderRadius: '50%', backgroundColor: '#10b981' }} />
+                        <div>
+                          <strong style={{ color: '#065f46', fontSize: '0.95rem' }}>
+                            {activeCandidates.length} Candidate(s) Actively Giving Exam Now
+                          </strong>
+                          <div style={{ fontSize: '0.78rem', color: '#047857' }}>
+                            Live monitoring auto-refreshes every 10 seconds
+                          </div>
+                        </div>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={async () => {
+                          if (!selectedExamForGrading) return;
+                          const roster = await assignmentService.getExamCandidateRoster(selectedExamForGrading.id);
+                          setExamCandidateRoster(roster);
+                        }}
+                      >
+                        🔄 Refresh Live Roster
+                      </Button>
+                    </div>
+
+                    {activeCandidates.length === 0 ? (
+                      <EmptyState
+                        title="No Candidates Currently in Active Session"
+                        description="There are currently no students with an in-progress session for this paper. As soon as students begin their exam, they appear here live."
+                      />
+                    ) : (
+                      <TableContainer>
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>Candidate Name</TableHead>
+                              <TableHead>KMU Reg Number</TableHead>
+                              <TableHead>Cohort / Batch</TableHead>
+                              <TableHead>Progress</TableHead>
+                              <TableHead>Live Proctor Status</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {activeCandidates.map((candidate) => (
+                              <TableRow key={candidate.id}>
+                                <TableCell>
+                                  <strong>{candidate.studentName || 'Student Candidate'}</strong>
+                                </TableCell>
+                                <TableCell>{candidate.kmuRegistrationNo || '—'}</TableCell>
+                                <TableCell>
+                                  {candidate.batch || selectedExamForGrading.batch} ({candidate.semester || selectedExamForGrading.semester})
+                                </TableCell>
+                                <TableCell>
+                                  <span style={{ fontWeight: 600, color: '#0f2744' }}>
+                                    {candidate.answersCount ?? 0} answers recorded
+                                  </span>
+                                </TableCell>
+                                <TableCell>
+                                  <Badge variant="success">
+                                    🟢 Active Now
+                                  </Badge>
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </TableContainer>
+                    )}
+                  </div>
+                );
+              })()
             ) : examSubmissions.length === 0 && examResults.length === 0 ? (
               <EmptyState
                 title="No Candidate Submissions Found"
@@ -1512,17 +1864,22 @@ export const TeacherExamsPage: React.FC = () => {
                         ...examSubmissions
                           .filter((s) => !gradedStudentIds.has(s.studentId))
                           .map((s) => ({
+                            ...s,
                             id: s.id,
                             examId: s.examId,
                             studentId: s.studentId,
                             studentName: s.studentName,
                             kmuRegistrationNo: s.kmuRegistrationNo,
-                            marks: 0,
+                            marks: s.mcqMarks ?? 0,
                             totalMarks: selectedExamForGrading.totalMarks,
-                            percentage: 0,
+                            percentage: s.mcqTotalMarks && s.mcqTotalMarks > 0 ? Math.round(((s.mcqMarks ?? 0) / selectedExamForGrading.totalMarks) * 1000) / 10 : 0,
                             passed: false,
                             status: 'pending' as const,
                             answersCount: s.answersCount,
+                            answers: s.answers,
+                            writtenAnswers: s.writtenAnswers,
+                            mcqMarks: s.mcqMarks,
+                            mcqTotalMarks: s.mcqTotalMarks,
                           })),
                       ];
 
@@ -1540,9 +1897,25 @@ export const TeacherExamsPage: React.FC = () => {
                           <TableCell>{item.answersCount ?? '—'} MCQs</TableCell>
                           <TableCell>
                             {item.status === 'pending' ? (
-                              <span style={{ color: '#d97706', fontStyle: 'italic' }}>Pending Evaluation</span>
+                              <div>
+                                <span style={{ color: '#0f2744', fontWeight: 700 }}>
+                                  MCQ: {item.mcqMarks ?? 0} / {item.mcqTotalMarks ?? '—'}
+                                </span>
+                                {hasWritten && (
+                                  <div style={{ fontSize: '0.72rem', color: '#d97706', fontStyle: 'italic' }}>
+                                    + Written Pending
+                                  </div>
+                                )}
+                              </div>
                             ) : (
-                              <strong>{item.marks} / {item.totalMarks}</strong>
+                              <div>
+                                <strong style={{ color: '#047857', fontSize: '0.95rem' }}>{item.marks} / {item.totalMarks}</strong>
+                                {item.mcqMarks !== undefined && item.writtenMarks !== undefined && (
+                                  <div style={{ fontSize: '0.72rem', color: 'var(--color-slate-500)' }}>
+                                    MCQ: {item.mcqMarks} + Written: {item.writtenMarks}
+                                  </div>
+                                )}
+                              </div>
                             )}
                           </TableCell>
                           <TableCell>
@@ -1583,8 +1956,35 @@ export const TeacherExamsPage: React.FC = () => {
                               >
                                 {item.status === 'graded' ? 'Review / Re-grade' : '✍️ Grade Written'}
                               </Button>
+                            ) : item.status === 'pending' ? (
+                              <Button
+                                variant="primary"
+                                size="sm"
+                                onClick={async () => {
+                                  try {
+                                    setIsGradingLoading(true);
+                                    await resultService.gradeSubmission({
+                                      examId: selectedExamForGrading.id,
+                                      studentId: item.studentId,
+                                      evaluatorUid: currentUser?.uid,
+                                    });
+                                    await handleOpenGradingModal(selectedExamForGrading);
+                                  } catch (err: any) {
+                                    setGradingNotice(`Error grading candidate: ${err?.message || 'Failed'}`);
+                                  } finally {
+                                    setIsGradingLoading(false);
+                                  }
+                                }}
+                                style={{
+                                  backgroundColor: '#059669',
+                                  borderColor: '#059669',
+                                  fontSize: '0.78rem',
+                                }}
+                              >
+                                ⚡ Grade MCQ
+                              </Button>
                             ) : (
-                              <span style={{ fontSize: '0.8rem', color: 'var(--color-slate-400)' }}>MCQ Auto</span>
+                              <Badge variant="success">✓ Graded</Badge>
                             )}
                           </TableCell>
                         </TableRow>

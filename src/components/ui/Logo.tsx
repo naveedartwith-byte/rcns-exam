@@ -17,15 +17,15 @@ export const Logo: React.FC<LogoProps> = ({
   const isCollapsed = variant === 'collapsed';
 
   const logoSizes = {
-    sm: 36,
-    md: 46,
-    lg: 58,
+    sm: 34,
+    md: 44,
+    lg: subtitle ? 52 : 48,
   };
 
   const titleSizes = {
     sm: '0.85rem',
     md: '1.05rem',
-    lg: '1.25rem',
+    lg: subtitle ? '1.25rem' : '1.35rem',
   };
 
   const logoDimension = logoSizes[size];
@@ -61,7 +61,7 @@ export const Logo: React.FC<LogoProps> = ({
       />
 
       {!isCollapsed && (
-        <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', textAlign: 'center' }}>
           <span
             style={{
               fontFamily: 'var(--font-heading)',
@@ -71,9 +71,14 @@ export const Logo: React.FC<LogoProps> = ({
               lineHeight: 1.15,
               letterSpacing: '-0.01em',
               textTransform: 'uppercase',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              textAlign: 'center',
             }}
           >
-            ROYAL COLLEGE OF NURSING SWAT
+            <span style={{ whiteSpace: 'nowrap' }}>ROYAL COLLEGE OF</span>
+            <span style={{ whiteSpace: 'nowrap' }}>NURSING SWAT</span>
           </span>
           {subtitle && (
             <span
@@ -84,6 +89,7 @@ export const Logo: React.FC<LogoProps> = ({
                 letterSpacing: '0.04em',
                 textTransform: 'uppercase',
                 marginTop: '2px',
+                textAlign: 'center',
               }}
             >
               Affiliated with KMU Peshawar

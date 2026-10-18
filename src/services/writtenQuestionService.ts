@@ -45,14 +45,29 @@ export const writtenQuestionService = {
     const cleanMaxMarks = Number(data.maxMarks);
     const validMaxMarks = !isNaN(cleanMaxMarks) && cleanMaxMarks > 0 ? cleanMaxMarks : 5;
 
-    await setDoc(docRef, {
-      ...data,
+    const payload: Record<string, any> = {
       id: docRef.id,
+      examId: data.examId,
+      type: data.type || 'short',
+      question: (data.question || '').trim(),
       maxMarks: validMaxMarks,
       order: Number(data.order) || 1,
+      guidelines: (data.guidelines || '').trim(),
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
-    });
+    };
+
+    if (data.minWords !== undefined && data.minWords !== null && !isNaN(Number(data.minWords))) {
+      payload.minWords = Number(data.minWords);
+    }
+    if (data.maxWords !== undefined && data.maxWords !== null && !isNaN(Number(data.maxWords))) {
+      payload.maxWords = Number(data.maxWords);
+    }
+    if (data.createdBy) {
+      payload.createdBy = data.createdBy;
+    }
+
+    await setDoc(docRef, payload);
 
     return docRef.id;
   },
@@ -67,13 +82,24 @@ export const writtenQuestionService = {
     if (!questionId) return;
     const docRef = doc(db, 'writtenQuestions', questionId);
     const updateData: Record<string, any> = {
-      ...data,
       updatedAt: serverTimestamp(),
     };
+
+    if (data.type !== undefined) updateData.type = data.type;
+    if (data.question !== undefined) updateData.question = data.question.trim();
+    if (data.guidelines !== undefined) updateData.guidelines = data.guidelines.trim();
+    if (data.order !== undefined) updateData.order = Number(data.order) || 1;
     if (data.maxMarks !== undefined) {
       const clean = Number(data.maxMarks);
       updateData.maxMarks = !isNaN(clean) && clean > 0 ? clean : 5;
     }
+    if (data.minWords !== undefined && data.minWords !== null && !isNaN(Number(data.minWords))) {
+      updateData.minWords = Number(data.minWords);
+    }
+    if (data.maxWords !== undefined && data.maxWords !== null && !isNaN(Number(data.maxWords))) {
+      updateData.maxWords = Number(data.maxWords);
+    }
+
     await updateDoc(docRef, updateData);
   },
 
@@ -139,13 +165,25 @@ export const writtenQuestionService = {
   /**
    * Reads sanitized written questions for student attempt directly from the exam document.
    */
-  async getStudentWrittenQuestions(examId: string): Promise<StudentWrittenQuestion[]> {
+  async getStudentWrittenQuestions(examId: string, studentId?: string): Promise<StudentWrittenQuestion[]> {
     if (!examId) return [];
     try {
       const examRef = doc(db, 'exams', examId);
       const examSnap = await getDoc(examRef);
       if (examSnap.exists()) {
         const data = examSnap.data();
+
+        // Security Requirement #2 & #4: If exam requires secret code, check candidate assignment
+        if (data.requiresSecretCode === true && studentId) {
+          const assignmentRef = doc(db, 'assignments', `${examId}_${studentId}`);
+          const assignSnap = await getDoc(assignmentRef);
+          if (!assignSnap.exists() || assignSnap.data()?.codeVerified !== true) {
+            throw new Error(
+              'Institutional Security Notice: Secret Exam Code verification is required before written questions can be loaded.'
+            );
+          }
+        }
+
         if (Array.isArray(data.sanitizedWrittenQuestions)) {
           return data.sanitizedWrittenQuestions.map((q: any, idx: number) => ({
             id: q.id || `wq-${idx + 1}`,

@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   SearchBar,
   Select,
@@ -6,13 +7,13 @@ import {
   Badge,
   Button,
   Card,
-  Modal,
   ConfirmDialog,
   EmptyState,
   Alert,
   LoadingSpinner,
 } from '../../components/ui';
 import { useAuth } from '../../hooks/useAuth';
+import { auth } from '../../firebase/auth';
 import { assignmentService } from '../../services/assignmentService';
 import { questionService } from '../../services/questionService';
 import { resultService } from '../../services/resultService';
@@ -23,9 +24,18 @@ import type { Question } from '../../types/question';
 import type { StudentWrittenQuestion, StudentWrittenAnswer } from '../../types/writtenQuestion';
 import { formatPakistanDateTime } from '../../utils/dateTime';
 import { checkStudentExamEligibility } from '../../utils/examEligibility';
+import { SecretExamCodeModal } from '../../components/student/SecretExamCodeModal';
+import { examCodeService } from '../../services/examCodeService';
 
 export const StudentExamsPage: React.FC = () => {
   const { currentUser, userProfile, studentProfile } = useAuth();
+  const navigate = useNavigate();
+
+  // Submission locks to prevent duplicate submissions from double-clicks or simultaneous timer events
+  const isSubmittingRef = useRef(false);
+  const hasSubmittedRef = useRef(false);
+  const selectedAnswersRef = useRef<Record<string | number, number>>({});
+  const writtenAnswersRef = useRef<Record<string, StudentWrittenAnswer>>({});
 
   const [exams, setExams] = useState<Exam[]>([]);
   const [activeTab, setActiveTab] = useState('all');
@@ -44,6 +54,13 @@ export const StudentExamsPage: React.FC = () => {
   const [timeLeftSeconds, setTimeLeftSeconds] = useState(3600);
   const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
   const [examSubmitted, setExamSubmitted] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [mobilePaletteOpen, setMobilePaletteOpen] = useState(false);
+  const [tabSwitchAlertOpen, setTabSwitchAlertOpen] = useState(false);
+  const [tabSwitchCount, setTabSwitchCount] = useState(0);
+  const [resumeNotice, setResumeNotice] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submissionError, setSubmissionError] = useState<string | null>(null);
   const [examScoreSummary, setExamScoreSummary] = useState<{
     score: number;
     total: number;
@@ -55,6 +72,227 @@ export const StudentExamsPage: React.FC = () => {
   } | null>(null);
   const [isLoadingQuestions, setIsLoadingQuestions] = useState(false);
   const [examQuestionsError, setExamQuestionsError] = useState<string | null>(null);
+
+  // Secret Exam Code State
+  const [codeModalExam, setCodeModalExam] = useState<Exam | null>(null);
+  const [isCodeModalOpen, setIsCodeModalOpen] = useState(false);
+
+  // Fullscreen toggler
+  const toggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {});
+    } else {
+      document.exitFullscreen().then(() => setIsFullscreen(false)).catch(() => {});
+    }
+  };
+
+  // Continuous Auto-Save to LocalStorage so no keystroke or answer is ever lost (Requirement #1)
+  useEffect(() => {
+    if (!takingExam || examSubmitted || !currentUser) return;
+
+    try {
+      const progressData = {
+        examId: takingExam.id,
+        studentId: currentUser.uid,
+        selectedAnswers,
+        writtenAnswers,
+        currentQuestionIndex,
+        activeExamSection,
+        timeLeftSeconds,
+        flaggedQuestions,
+        tabSwitchCount,
+        lastSavedAt: Date.now(),
+      };
+      localStorage.setItem(
+        `rcns_exam_progress_${currentUser.uid}_${takingExam.id}`,
+        JSON.stringify(progressData)
+      );
+    } catch {
+      // ignore storage errors
+    }
+  }, [
+    takingExam,
+    examSubmitted,
+    currentUser,
+    selectedAnswers,
+    writtenAnswers,
+    currentQuestionIndex,
+    activeExamSection,
+    timeLeftSeconds,
+    flaggedQuestions,
+    tabSwitchCount,
+  ]);
+
+  // Anti-cheating & Tab Switching Guard (Requirement #1)
+  useEffect(() => {
+    if (!takingExam || examSubmitted) return;
+
+    // Prevent closing/reloading window before finishing exam
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = 'Examination in progress! Under institutional regulations, you cannot leave before completing and submitting your exam.';
+      return e.returnValue;
+    };
+
+    // Prevent back-button navigation during exam
+    window.history.pushState(null, '', window.location.href);
+    const handlePopState = () => {
+      window.history.pushState(null, '', window.location.href);
+      alert('Examination Security: Back navigation is disabled during an active examination. Please finish and submit your paper.');
+    };
+
+    // Detect tab switching or window blur: Save state immediately & show security modal (Requirement #1)
+    const handleVisibilityChange = async () => {
+      if (document.hidden && takingExam && !examSubmitted && currentUser) {
+        const nextCount = tabSwitchCount + 1;
+        setTabSwitchCount(nextCount);
+
+        const progressData = {
+          examId: takingExam.id,
+          studentId: currentUser.uid,
+          selectedAnswers,
+          writtenAnswers,
+          currentQuestionIndex,
+          timeLeftSeconds,
+          activeExamSection,
+          flaggedQuestions,
+          tabSwitchCount: nextCount,
+          lastSavedAt: Date.now(),
+        };
+
+        try {
+          localStorage.setItem(
+            `rcns_exam_progress_${currentUser.uid}_${takingExam.id}`,
+            JSON.stringify(progressData)
+          );
+        } catch {
+          // ignore
+        }
+
+        try {
+          await assignmentService.recordCandidateHeartbeat({
+            examId: takingExam.id,
+            studentId: currentUser.uid,
+            studentName: userProfile?.name || studentProfile?.name,
+            kmuRegistrationNo: studentProfile?.kmuRegistrationNo,
+            answersCount: Object.keys(selectedAnswers).length,
+            tabSwitchCount: nextCount,
+            answers: selectedAnswers,
+            writtenAnswers,
+            currentQuestionIndex,
+            timeLeftSeconds,
+            activeExamSection,
+            flaggedQuestions,
+            batch: studentProfile?.batch || takingExam.batch,
+            semester: studentProfile?.semester || takingExam.semester,
+            program: studentProfile?.program || takingExam.program,
+            examTitle: takingExam.title,
+            examType: takingExam.type,
+            subject: takingExam.subject,
+          });
+        } catch {
+          // best-effort
+        }
+
+        setTabSwitchAlertOpen(true);
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener('popstate', handlePopState);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('popstate', handlePopState);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [
+    takingExam,
+    examSubmitted,
+    currentUser,
+    userProfile,
+    studentProfile,
+    selectedAnswers,
+    writtenAnswers,
+    currentQuestionIndex,
+    activeExamSection,
+    timeLeftSeconds,
+    flaggedQuestions,
+    tabSwitchCount,
+  ]);
+
+  // Real-time Candidate Heartbeat: Enables Teacher Proctoring & Syncs In-Progress Answers
+  useEffect(() => {
+    if (!takingExam || examSubmitted || !currentUser) return;
+
+    const answeredCount = Object.keys(selectedAnswers).length;
+
+    // Send immediate heartbeat
+    assignmentService
+      .recordCandidateHeartbeat({
+        examId: takingExam.id,
+        studentId: currentUser.uid,
+        studentName: userProfile?.name || studentProfile?.name || 'Student Candidate',
+        kmuRegistrationNo: studentProfile?.kmuRegistrationNo || '2026/KMU/RCNS/01',
+        answersCount: answeredCount,
+        tabSwitchCount,
+        answers: selectedAnswers,
+        writtenAnswers,
+        currentQuestionIndex,
+        timeLeftSeconds,
+        activeExamSection,
+        flaggedQuestions,
+        batch: studentProfile?.batch || takingExam.batch,
+        semester: studentProfile?.semester || takingExam.semester,
+        program: studentProfile?.program || takingExam.program,
+        examTitle: takingExam.title,
+        examType: takingExam.type,
+        subject: takingExam.subject,
+      })
+      .catch(() => {});
+
+    // Periodic heartbeat every 15 seconds
+    const interval = setInterval(() => {
+      assignmentService
+        .recordCandidateHeartbeat({
+          examId: takingExam.id,
+          studentId: currentUser.uid,
+          studentName: userProfile?.name || studentProfile?.name || 'Student Candidate',
+          kmuRegistrationNo: studentProfile?.kmuRegistrationNo || '2026/KMU/RCNS/01',
+          answersCount: Object.keys(selectedAnswers).length,
+          tabSwitchCount,
+          answers: selectedAnswers,
+          writtenAnswers,
+          currentQuestionIndex,
+          timeLeftSeconds,
+          activeExamSection,
+          flaggedQuestions,
+          batch: studentProfile?.batch || takingExam.batch,
+          semester: studentProfile?.semester || takingExam.semester,
+          program: studentProfile?.program || takingExam.program,
+          examTitle: takingExam.title,
+          examType: takingExam.type,
+          subject: takingExam.subject,
+        })
+        .catch(() => {});
+    }, 15000);
+
+    return () => clearInterval(interval);
+  }, [
+    takingExam,
+    examSubmitted,
+    currentUser,
+    userProfile,
+    studentProfile,
+    selectedAnswers,
+    writtenAnswers,
+    currentQuestionIndex,
+    timeLeftSeconds,
+    activeExamSection,
+    flaggedQuestions,
+    tabSwitchCount,
+  ]);
 
   // Load authorized exams
   useEffect(() => {
@@ -80,44 +318,66 @@ export const StudentExamsPage: React.FC = () => {
     };
   }, [currentUser, studentProfile]);
 
-  // Filtered exams list
-  const filteredExams = exams.filter((exam) => {
-    // Tab filter
-    if (activeTab === 'available' && exam.status !== 'active') return false;
-    if (activeTab === 'scheduled' && exam.status !== 'scheduled') return false;
-    if (activeTab === 'completed' && exam.status !== 'completed') return false;
+  // Filtered exams list, sorted newest assigned/created first (Requirement #9)
+  const filteredExams = exams
+    .filter((exam) => {
+      // Tab filter
+      if (activeTab === 'available' && exam.status !== 'active') return false;
+      if (activeTab === 'scheduled' && exam.status !== 'scheduled') return false;
+      if (activeTab === 'completed' && exam.status !== 'completed') return false;
 
-    // Type filter
-    if (typeFilter !== 'all' && exam.type !== typeFilter) return false;
+      // Type filter
+      if (typeFilter !== 'all' && exam.type !== typeFilter) return false;
 
-    // Search query
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      const matchTitle = exam.title.toLowerCase().includes(q);
-      const matchSubject = (exam.subject || '').toLowerCase().includes(q);
-      const matchTeacher = (exam.teacherName || '').toLowerCase().includes(q);
-      if (!matchTitle && !matchSubject && !matchTeacher) return false;
-    }
+      // Search query
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const matchTitle = exam.title.toLowerCase().includes(q);
+        const matchSubject = (exam.subject || '').toLowerCase().includes(q);
+        const matchTeacher = (exam.teacherName || '').toLowerCase().includes(q);
+        if (!matchTitle && !matchSubject && !matchTeacher) return false;
+      }
 
-    return true;
-  });
+      return true;
+    })
+    .sort((a, b) => {
+      const getMillis = (val: any) => {
+        if (!val) return 0;
+        if (typeof val === 'number') return val;
+        if (typeof val?.toMillis === 'function') return val.toMillis();
+        if (typeof val?.toDate === 'function') return val.toDate().getTime();
+        const d = new Date(val).getTime();
+        return isNaN(d) ? 0 : d;
+      };
+      const timeA = getMillis((a as any).assignedAt || a.createdAt || a.updatedAt || a.startAt);
+      const timeB = getMillis((b as any).assignedAt || b.createdAt || b.updatedAt || b.startAt);
+      return timeB - timeA;
+    });
 
-  // Countdown timer for taking exam
+  // Countdown timer for taking exam - stops immediately during submission and avoids double-firing
   useEffect(() => {
-    let timer: NodeJS.Timeout;
-    if (takingExam && !examSubmitted && timeLeftSeconds > 0) {
+    let timer: NodeJS.Timeout | null = null;
+    if (takingExam && !examSubmitted && !isSubmitting && timeLeftSeconds > 0) {
       timer = setInterval(() => {
         setTimeLeftSeconds((prev) => {
           if (prev <= 1) {
-            handleFinalSubmit();
+            if (timer) clearInterval(timer);
+            // Trigger automatic submission outside state updater callback
+            setTimeout(() => {
+              if (!hasSubmittedRef.current && !isSubmittingRef.current) {
+                handleFinalSubmit();
+              }
+            }, 0);
             return 0;
           }
           return prev - 1;
         });
       }, 1000);
     }
-    return () => clearInterval(timer);
-  }, [takingExam, examSubmitted, timeLeftSeconds]);
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, [takingExam?.id, examSubmitted, isSubmitting, timeLeftSeconds > 0]);
 
   const handleStartExam = async (exam: Exam) => {
     // 1. Perform canonical student exam eligibility check & diagnostics
@@ -135,12 +395,52 @@ export const StudentExamsPage: React.FC = () => {
       return;
     }
 
+    const activeUid = currentUser?.uid || auth.currentUser?.uid;
+
+    // 3. Inspect assignment for prior submission & code verification
+    if (activeUid) {
+      try {
+        const assign = await assignmentService.getAssignmentById(`${exam.id}_${activeUid}`);
+        if (assign) {
+          if (assign.status === 'submitted' || assign.status === 'graded') {
+            alert('Institutional Notice: You have already completed and submitted this examination.');
+            return;
+          }
+
+          // Secret Exam Code Check (Requirements #2, #5, #7)
+          const requiresCode = Boolean(exam.requiresSecretCode);
+          const alreadyVerified = assign.codeVerified === true && assign.status === 'started';
+
+          if (requiresCode && !alreadyVerified) {
+            // Student must enter secret exam code before attempt can begin
+            setCodeModalExam(exam);
+            setIsCodeModalOpen(true);
+            return;
+          }
+        } else if (exam.requiresSecretCode) {
+          // No prior assignment record exists and exam requires code
+          setCodeModalExam(exam);
+          setIsCodeModalOpen(true);
+          return;
+        }
+      } catch (checkErr) {
+        console.warn('Assignment inspection note:', checkErr);
+      }
+    }
+
+    // Launch active examination session
+    await launchExamSession(exam);
+  };
+
+  const launchExamSession = async (exam: Exam) => {
+    const activeUid = currentUser?.uid || auth.currentUser?.uid;
+
     // 3. Ensure assignment document exists in Firestore for this eligible candidate
-    if (currentUser) {
+    if (activeUid) {
       try {
         await assignmentService.ensureStudentAssignment({
           examId: exam.id,
-          studentId: currentUser.uid,
+          studentId: activeUid,
           batch: studentProfile?.batch || exam.batch || '',
           semester: studentProfile?.semester || exam.semester || '',
           program: studentProfile?.program || exam.program || '',
@@ -151,22 +451,126 @@ export const StudentExamsPage: React.FC = () => {
       }
     }
 
+    // 4. Restore previous state if candidate was disconnected, switched tabs, or exited (Requirement #1)
+    let savedAnswers: Record<string | number, number> = {};
+    let savedWritten: Record<string, StudentWrittenAnswer> = {};
+    let savedIndex = 0;
+    let savedTime = exam.duration * 60;
+    let savedSection: 'mcq' | 'written' = 'mcq';
+    let savedFlags: Record<number, boolean> = {};
+    let savedSwitches = 0;
+    let isResumed = false;
+
+    if (activeUid) {
+      // Step A: Inspect localStorage for latest in-memory draft
+      try {
+        const localKey = `rcns_exam_progress_${activeUid}_${exam.id}`;
+        const localStr = localStorage.getItem(localKey);
+        if (localStr) {
+          const parsed = JSON.parse(localStr);
+          if (parsed && parsed.examId === exam.id) {
+            if (parsed.selectedAnswers && Object.keys(parsed.selectedAnswers).length > 0) {
+              savedAnswers = parsed.selectedAnswers;
+              isResumed = true;
+            }
+            if (parsed.writtenAnswers && Object.keys(parsed.writtenAnswers).length > 0) {
+              savedWritten = parsed.writtenAnswers;
+              isResumed = true;
+            }
+            if (parsed.currentQuestionIndex !== undefined) {
+              savedIndex = Math.max(0, Number(parsed.currentQuestionIndex) || 0);
+            }
+            if (parsed.timeLeftSeconds !== undefined && Number(parsed.timeLeftSeconds) > 0) {
+              savedTime = Number(parsed.timeLeftSeconds);
+              isResumed = true;
+            }
+            if (parsed.activeExamSection) savedSection = parsed.activeExamSection;
+            if (parsed.flaggedQuestions) savedFlags = parsed.flaggedQuestions;
+            if (parsed.tabSwitchCount) savedSwitches = Number(parsed.tabSwitchCount) || 0;
+          }
+        }
+      } catch {
+        // ignore
+      }
+
+      // Step B: Inspect Firestore candidate assignment document
+      try {
+        const assign = await assignmentService.getAssignmentById(`${exam.id}_${activeUid}`);
+        if (assign) {
+          if (assign.status === 'submitted' || assign.status === 'graded') {
+            alert('Institutional Notice: You have already completed and submitted this examination.');
+            return;
+          }
+          if (assign.answers && Object.keys(assign.answers).length > 0) {
+            savedAnswers = { ...assign.answers, ...savedAnswers };
+            isResumed = true;
+          }
+          if (assign.writtenAnswers && Object.keys(assign.writtenAnswers).length > 0) {
+            savedWritten = { ...assign.writtenAnswers, ...savedWritten };
+            isResumed = true;
+          }
+          if (assign.currentQuestionIndex !== undefined && savedIndex === 0) {
+            savedIndex = Math.max(0, Number(assign.currentQuestionIndex) || 0);
+          }
+          if (assign.timeLeftSeconds !== undefined && Number(assign.timeLeftSeconds) > 0 && savedTime === exam.duration * 60) {
+            savedTime = Number(assign.timeLeftSeconds);
+            isResumed = true;
+          }
+          if (assign.activeExamSection && savedSection === 'mcq') {
+            savedSection = assign.activeExamSection;
+          }
+          if (assign.flaggedQuestions && Object.keys(savedFlags).length === 0) {
+            if (Array.isArray(assign.flaggedQuestions)) {
+              const flagObj: Record<number, boolean> = {};
+              assign.flaggedQuestions.forEach((idx) => {
+                flagObj[idx] = true;
+              });
+              savedFlags = flagObj;
+            } else if (typeof assign.flaggedQuestions === 'object') {
+              savedFlags = assign.flaggedQuestions as Record<number, boolean>;
+            }
+          }
+          if (assign.tabSwitchCount !== undefined) {
+            savedSwitches = Math.max(savedSwitches, Number(assign.tabSwitchCount) || 0);
+          }
+        }
+      } catch (checkErr) {
+        console.warn('Could not inspect candidate assignment record:', checkErr);
+      }
+    }
+
     setTakingExam(exam);
-    setCurrentQuestionIndex(0);
-    setSelectedAnswers({});
-    setFlaggedQuestions({});
-    setWrittenAnswers({});
-    setActiveExamSection('mcq');
-    setTimeLeftSeconds(exam.duration * 60);
+    setCurrentQuestionIndex(savedIndex);
+    setSelectedAnswers(savedAnswers);
+    selectedAnswersRef.current = savedAnswers;
+    setFlaggedQuestions(savedFlags);
+    setWrittenAnswers(savedWritten);
+    writtenAnswersRef.current = savedWritten;
+    setActiveExamSection(savedSection);
+    setTimeLeftSeconds(savedTime);
+    setTabSwitchCount(savedSwitches);
     setExamSubmitted(false);
+    isSubmittingRef.current = false;
+    hasSubmittedRef.current = false;
     setExamScoreSummary(null);
+    setSubmissionError(null);
     setIsLoadingQuestions(true);
     setExamQuestionsError(null);
 
+    if (isResumed) {
+      const minsLeft = Math.floor(savedTime / 60);
+      const secsLeft = savedTime % 60;
+      setResumeNotice(
+        `✓ Examination Resumed: Continuing from Question ${savedIndex + 1} with ${minsLeft}m ${secsLeft}s remaining. Your previous responses have been preserved.`
+      );
+    } else {
+      setResumeNotice(null);
+    }
+
     try {
       const [questions, wQuestions] = await Promise.all([
-        questionService.getStudentQuestions(exam.id),
-        writtenQuestionService.getStudentWrittenQuestions(exam.id),
+        questionService.getStudentQuestions(exam.id, activeUid),
+        writtenQuestionService.getStudentWrittenQuestions(exam.id, activeUid),
       ]);
       setExamQuestions(questions);
       setWrittenQuestions(wQuestions);
@@ -217,27 +621,65 @@ export const StudentExamsPage: React.FC = () => {
   };
 
   const handleSelectOption = (optIndex: number) => {
-    const currentQ = examQuestions[currentQuestionIndex];
-    setSelectedAnswers((prev) => ({
-      ...prev,
-      [currentQuestionIndex]: optIndex,
-      ...(currentQ?.id ? { [currentQ.id]: optIndex } : {}),
-    }));
+    setSelectedAnswers((prev) => {
+      const updated = {
+        ...prev,
+        [currentQuestionIndex]: optIndex,
+      };
+      selectedAnswersRef.current = updated;
+      // Keep local progress updated
+      if (currentUser && takingExam) {
+        try {
+          const key = `rcns_exam_progress_${currentUser.uid}_${takingExam.id}`;
+          const current = localStorage.getItem(key);
+          const data = current ? JSON.parse(current) : {};
+          localStorage.setItem(
+            key,
+            JSON.stringify({ ...data, selectedAnswers: updated, lastSavedAt: Date.now() })
+          );
+        } catch {}
+      }
+      return updated;
+    });
   };
 
   const handleToggleFlag = () => {
-    setFlaggedQuestions((prev) => ({
-      ...prev,
-      [currentQuestionIndex]: !prev[currentQuestionIndex],
-    }));
+    setFlaggedQuestions((prev) => {
+      const updated = {
+        ...prev,
+        [currentQuestionIndex]: !prev[currentQuestionIndex],
+      };
+      if (currentUser && takingExam) {
+        try {
+          const key = `rcns_exam_progress_${currentUser.uid}_${takingExam.id}`;
+          const current = localStorage.getItem(key);
+          const data = current ? JSON.parse(current) : {};
+          localStorage.setItem(
+            key,
+            JSON.stringify({ ...data, flaggedQuestions: updated, lastSavedAt: Date.now() })
+          );
+        } catch {}
+      }
+      return updated;
+    });
   };
 
   const handleClearAnswer = () => {
-    const currentQ = examQuestions[currentQuestionIndex];
     setSelectedAnswers((prev) => {
       const copy = { ...prev };
       delete copy[currentQuestionIndex];
-      if (currentQ?.id) delete copy[currentQ.id];
+      selectedAnswersRef.current = copy;
+      if (currentUser && takingExam) {
+        try {
+          const key = `rcns_exam_progress_${currentUser.uid}_${takingExam.id}`;
+          const current = localStorage.getItem(key);
+          const data = current ? JSON.parse(current) : {};
+          localStorage.setItem(
+            key,
+            JSON.stringify({ ...data, selectedAnswers: copy, lastSavedAt: Date.now() })
+          );
+        } catch {}
+      }
       return copy;
     });
   };
@@ -248,36 +690,113 @@ export const StudentExamsPage: React.FC = () => {
     questionText: string,
     text: string
   ) => {
-    setWrittenAnswers((prev) => ({
-      ...prev,
-      [questionId]: {
-        questionId,
-        type: qType,
-        questionText,
-        answerText: text,
-        wordCount: text.trim() ? text.trim().split(/\s+/).length : 0,
-        submittedAt: new Date().toISOString(),
-      },
-    }));
+    setWrittenAnswers((prev) => {
+      const updated = {
+        ...prev,
+        [questionId]: {
+          questionId,
+          type: qType,
+          questionText,
+          answerText: text,
+          wordCount: text.trim() ? text.trim().split(/\s+/).length : 0,
+          submittedAt: new Date().toISOString(),
+        },
+      };
+      writtenAnswersRef.current = updated;
+      if (currentUser && takingExam) {
+        try {
+          const key = `rcns_exam_progress_${currentUser.uid}_${takingExam.id}`;
+          const current = localStorage.getItem(key);
+          const data = current ? JSON.parse(current) : {};
+          localStorage.setItem(
+            key,
+            JSON.stringify({ ...data, writtenAnswers: updated, lastSavedAt: Date.now() })
+          );
+        } catch {}
+      }
+      return updated;
+    });
   };
 
+  // Synchronize answer refs whenever React state updates
+  useEffect(() => {
+    selectedAnswersRef.current = selectedAnswers;
+  }, [selectedAnswers]);
+
+  useEffect(() => {
+    writtenAnswersRef.current = writtenAnswers;
+  }, [writtenAnswers]);
+
   const handleFinalSubmit = async () => {
-    setShowSubmitConfirm(false);
-    if (!takingExam || !currentUser) return;
+    const activeUser = currentUser || auth.currentUser;
+    console.log('[handleFinalSubmit] Submission triggered:', {
+      hasExam: Boolean(takingExam),
+      activeUser: activeUser?.uid,
+      isSubmitting: isSubmittingRef.current,
+      hasSubmitted: hasSubmittedRef.current,
+    });
+
+    if (isSubmittingRef.current || hasSubmittedRef.current || !takingExam || !activeUser) {
+      console.warn('[handleFinalSubmit] Submission cancelled due to state guard');
+      return;
+    }
+
+    // Immediately acquire submission lock and show loading state
+    isSubmittingRef.current = true;
+    setIsSubmitting(true);
+    setSubmissionError(null);
 
     try {
-      // Calculate answered questions count
-      const answeredCount = examQuestions.filter(
-        (q, idx) => selectedAnswers[idx] !== undefined || (q.id && selectedAnswers[q.id] !== undefined)
-      ).length;
+      // 1. Retrieve latest answers from refs with fallback to state and localStorage
+      let finalSelected: Record<string | number, number> = { ...selectedAnswersRef.current };
+      let finalWritten: Record<string, StudentWrittenAnswer> = { ...writtenAnswersRef.current };
 
-      const writtenAnsweredCount = Object.values(writtenAnswers).filter(
-        (a) => a.answerText && a.answerText.trim().length > 0
+      if (Object.keys(finalSelected).length === 0 && Object.keys(selectedAnswers).length > 0) {
+        finalSelected = { ...selectedAnswers };
+      }
+      if (Object.keys(finalWritten).length === 0 && Object.keys(writtenAnswers).length > 0) {
+        finalWritten = { ...writtenAnswers };
+      }
+
+      try {
+        const key = `rcns_exam_progress_${activeUser.uid}_${takingExam.id}`;
+        const stored = localStorage.getItem(key);
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (parsed.selectedAnswers && typeof parsed.selectedAnswers === 'object') {
+            finalSelected = { ...parsed.selectedAnswers, ...finalSelected };
+          }
+          if (parsed.writtenAnswers && typeof parsed.writtenAnswers === 'object') {
+            finalWritten = { ...parsed.writtenAnswers, ...finalWritten };
+          }
+        }
+      } catch {
+        // best-effort
+      }
+
+      // Normalize MCQ answers so there is strictly ONE key per question (prevents double-counting)
+      const normalizedMcqAnswers: Record<string, any> = {};
+      examQuestions.forEach((q, idx) => {
+        const valIdx = finalSelected[idx];
+        const valId = q.id ? finalSelected[q.id] : undefined;
+
+        if (valIdx !== undefined && valIdx !== -1 && String(valIdx) !== '-1') {
+          normalizedMcqAnswers[q.id || idx] = valIdx;
+        } else if (valId !== undefined && valId !== -1 && String(valId) !== '-1') {
+          normalizedMcqAnswers[q.id] = valId;
+        }
+      });
+
+      // Calculate accurate answered questions count (exactly the number of attempted questions)
+      const answeredCount = Object.keys(normalizedMcqAnswers).length;
+
+      const writtenAnsweredCount = Object.values(finalWritten).filter(
+        (a) => a && a.answerText && a.answerText.trim().length > 0
       ).length;
 
       const result = await resultService.submitExamAttempt({
-        studentId: currentUser.uid,
-        studentName: userProfile?.name || 'Student Candidate',
+        studentId: activeUser.uid,
+        studentName: userProfile?.name || studentProfile?.name || 'Student Candidate',
         kmuRegistrationNo: studentProfile?.kmuRegistrationNo || '',
         examId: takingExam.id,
         examTitle: takingExam.title,
@@ -286,10 +805,21 @@ export const StudentExamsPage: React.FC = () => {
         program: studentProfile?.program || takingExam.program,
         semester: studentProfile?.semester || takingExam.semester,
         batch: studentProfile?.batch || '',
-        answers: selectedAnswers,
-        writtenAnswers,
+        answers: normalizedMcqAnswers,
+        writtenAnswers: finalWritten,
       });
 
+      // Clear local auto-saved draft
+      try {
+        localStorage.removeItem(`rcns_exam_progress_${activeUser.uid}_${takingExam.id}`);
+      } catch {
+        // ignore
+      }
+
+      // Finalize submission lock and stop timer
+      hasSubmittedRef.current = true;
+      setTimeLeftSeconds(0);
+      setShowSubmitConfirm(false);
       const hasWritten = writtenQuestions.length > 0 || Boolean(result.requiresWrittenGrading);
 
       setExamSubmitted(true);
@@ -299,7 +829,7 @@ export const StudentExamsPage: React.FC = () => {
         percentage: result.percentage,
         passed: result.passed ?? result.percentage >= 50,
         status: hasWritten ? 'pending' : (result.status || 'pending'),
-        answersCount: (result.answersCount || answeredCount) + writtenAnsweredCount,
+        answersCount: (result.answeredMCQs ?? answeredCount) + writtenAnsweredCount,
         totalQuestions: examQuestions.length + writtenQuestions.length,
       });
 
@@ -307,8 +837,21 @@ export const StudentExamsPage: React.FC = () => {
       setExams((prev) =>
         prev.map((e) => (e.id === takingExam.id ? { ...e, status: 'completed' } : e))
       );
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error submitting exam:', err);
+      // Re-enable submission on error so student can safely retry with answers & remaining time preserved
+      isSubmittingRef.current = false;
+      setIsSubmitting(false);
+      setShowSubmitConfirm(false);
+      setSubmissionError(
+        err?.message || 'Failed to submit examination answers. Please check your internet connection and click retry.'
+      );
+    } finally {
+      if (hasSubmittedRef.current) {
+        isSubmittingRef.current = false;
+        setIsSubmitting(false);
+        setShowSubmitConfirm(false);
+      }
     }
   };
 
@@ -433,9 +976,25 @@ export const StudentExamsPage: React.FC = () => {
                 <div>
                   {/* Card Header Info */}
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem', marginBottom: '0.75rem' }}>
-                    <Badge variant={statusBadgeConfig[exam.status].variant}>
-                      {statusBadgeConfig[exam.status].label}
-                    </Badge>
+                    <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                      <Badge variant={statusBadgeConfig[exam.status].variant}>
+                        {statusBadgeConfig[exam.status].label}
+                      </Badge>
+                      {exam.requiresSecretCode && (
+                        <Badge
+                          variant="outline"
+                          style={{
+                            borderColor: '#d97706',
+                            color: '#b45309',
+                            fontSize: '0.72rem',
+                            fontWeight: 700,
+                            backgroundColor: '#fffbeb',
+                          }}
+                        >
+                          🔒 Code Protected
+                        </Badge>
+                      )}
+                    </div>
 
                     <span
                       style={{
@@ -510,7 +1069,11 @@ export const StudentExamsPage: React.FC = () => {
                       onClick={() => handleStartExam(exam)}
                       style={{ backgroundColor: '#0f2744' }}
                     >
-                      Start Examination Now →
+                      {currentUser &&
+                      ((exam as any).assignmentStatus === 'started' ||
+                        localStorage.getItem(`rcns_exam_progress_${currentUser.uid}_${exam.id}`))
+                        ? 'Resume Examination Now →'
+                        : 'Start Examination Now →'}
                     </Button>
                   )}
 
@@ -537,333 +1100,554 @@ export const StudentExamsPage: React.FC = () => {
       )}
 
       {/* =========================================================================
-          LIVE EXAMINATION ATTEMPT MODAL / VIEW
+          LIVE FULL-SCREEN EXAMINATION ATTEMPT PORTAL (Laptop No-Scroll, Mobile/iPad Responsive)
           ========================================================================= */}
       {takingExam && (
-        <Modal
-          isOpen={Boolean(takingExam)}
-          onClose={() => {
-            if (!examSubmitted) {
-              if (window.confirm('Are you sure you want to exit the exam screen? Your active time is still running.')) {
-                setTakingExam(null);
-              }
-            } else {
-              setTakingExam(null);
-            }
+        <div
+          className="rcns-fullscreen-exam-portal"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            width: '100vw',
+            height: '100dvh',
+            backgroundColor: '#0f172a',
+            zIndex: 99999,
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
           }}
-          title={takingExam.title}
-          description={`Subject: ${takingExam.subject} • Candidate KMU Verified Session`}
-          maxWidth="xl"
         >
-          {examSubmitted && examScoreSummary ? (
-            /* Post-Submission Result Preview Card */
-            <div style={{ textAlign: 'center', padding: '1.5rem 1rem' }}>
+          {/* Top Examination Proctoring Bar */}
+          <div
+            className="rcns-exam-proctor-header"
+            style={{
+              minHeight: '56px',
+              backgroundColor: '#0f2744',
+              color: '#ffffff',
+              padding: '0.4rem 1.25rem',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
+              flexShrink: 0,
+              gap: '0.5rem',
+              flexWrap: 'wrap',
+            }}
+          >
+            {/* Institution Brand & Subject */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', minWidth: 0, flex: 1 }}>
               <div
                 style={{
-                  width: '64px',
-                  height: '64px',
+                  width: '32px',
+                  height: '32px',
                   borderRadius: '50%',
-                  backgroundColor: '#ecfdf5',
-                  color: '#059669',
+                  backgroundColor: '#1e3a8a',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  margin: '0 auto 1.25rem',
+                  color: '#93c5fd',
+                  fontWeight: 800,
+                  fontSize: '0.8rem',
+                  flexShrink: 0,
                 }}
               >
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
-                  <polyline points="22 4 12 14.01 9 11.01" />
-                </svg>
+                RC
+              </div>
+              <div style={{ minWidth: 0, overflow: 'hidden' }}>
+                <div style={{ fontSize: '0.875rem', fontWeight: 700, color: '#ffffff', lineHeight: 1.2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {takingExam.title}
+                </div>
+                <div style={{ fontSize: '0.72rem', color: '#94a3b8', lineHeight: 1.2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {takingExam.subject} • Candidate: {studentProfile?.kmuRegistrationNo || 'KMU Verified'}
+                </div>
+              </div>
+            </div>
+
+            {/* Right: Timer, Submission & Tools */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0, flexWrap: 'wrap' }}>
+              {/* Question count (desktop) */}
+              <div className="exam-header-qcount" style={{ fontSize: '0.825rem', color: '#cbd5e1' }}>
+                <span style={{ color: '#94a3b8' }}>Status: </span>
+                <strong style={{ color: '#ffffff' }}>
+                  {activeExamSection === 'mcq'
+                    ? `MCQ ${currentQuestionIndex + 1}/${totalQuestions}`
+                    : `Written (${Object.values(writtenAnswers).filter((a) => a.answerText?.trim()).length}/${writtenQuestions.length})`}
+                </strong>
+                <span style={{ fontSize: '0.75rem', color: '#10b981', marginLeft: '0.35rem' }}>
+                  ({answeredCount} MCQs done)
+                </span>
               </div>
 
-              <h2 style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--color-slate-900)' }}>
-                Examination Submitted Successfully!
-              </h2>
-              <p style={{ fontSize: '0.9rem', color: 'var(--color-slate-600)', marginTop: '0.35rem' }}>
-                Your responses have been recorded and timestamped in the ROYAL COLLEGE OF NURSING SWAT academic repository.
-              </p>
+              {/* Countdown Timer Badge */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.35rem',
+                  backgroundColor: timeLeftSeconds < 300 ? '#dc2626' : 'rgba(255, 255, 255, 0.15)',
+                  padding: '0.25rem 0.65rem',
+                  borderRadius: 'var(--radius-full)',
+                  fontWeight: 700,
+                  fontFamily: 'monospace',
+                  fontSize: '0.9rem',
+                  color: '#ffffff',
+                }}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <circle cx="12" cy="12" r="10" />
+                  <polyline points="12 6 12 12 16 14" />
+                </svg>
+                <span>{formatTimer(timeLeftSeconds)}</span>
+              </div>
 
-              {examScoreSummary.status === 'pending' ? (
+              {/* FINISH & SUBMIT BUTTON IN HEADER: ALWAYS VISIBLE ON ALL SCREENS & SECTIONS (Requirement #2) */}
+              <button
+                type="button"
+                onClick={() => {
+                  console.log('[StudentExamsPage] Header Submit Exam button clicked');
+                  setShowSubmitConfirm(true);
+                }}
+                disabled={isSubmitting}
+                style={{
+                  backgroundColor: '#dc2626',
+                  color: '#ffffff',
+                  border: 'none',
+                  padding: '0.35rem 0.75rem',
+                  borderRadius: 'var(--radius-sm)',
+                  fontWeight: 700,
+                  fontSize: '0.78rem',
+                  cursor: isSubmitting ? 'not-allowed' : 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.35rem',
+                  boxShadow: '0 1px 2px rgba(0, 0, 0, 0.2)',
+                  transition: 'background-color 0.15s ease',
+                  flexShrink: 0,
+                }}
+              >
+                {isSubmitting ? 'Submitting...' : '✓ Submit Exam'}
+              </button>
+
+              {/* Mobile Palette Toggle Button */}
+              <button
+                type="button"
+                className="exam-mobile-palette-btn"
+                onClick={() => setMobilePaletteOpen((v) => !v)}
+                style={{
+                  background: '#2563eb',
+                  border: 'none',
+                  color: '#ffffff',
+                  padding: '0.3rem 0.6rem',
+                  borderRadius: 'var(--radius-sm)',
+                  fontSize: '0.75rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  flexShrink: 0,
+                }}
+              >
+                📋 Palette
+              </button>
+
+              {/* Fullscreen Toggle */}
+              <button
+                type="button"
+                onClick={toggleFullscreen}
+                className="exam-header-fullscreen-btn"
+                title={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
+                style={{
+                  background: 'rgba(255, 255, 255, 0.12)',
+                  border: '1px solid rgba(255, 255, 255, 0.2)',
+                  color: '#ffffff',
+                  padding: '0.3rem 0.6rem',
+                  borderRadius: 'var(--radius-sm)',
+                  cursor: 'pointer',
+                  fontSize: '0.75rem',
+                  fontWeight: 600,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.25rem',
+                  flexShrink: 0,
+                }}
+              >
+                {isFullscreen ? '⤢ Normal' : '⛶ Fullscreen'}
+              </button>
+            </div>
+          </div>
+
+          {/* Progress Bar */}
+          <div style={{ height: '3px', width: '100%', backgroundColor: 'rgba(255, 255, 255, 0.1)', flexShrink: 0 }}>
+            <div
+              style={{
+                height: '100%',
+                width: `${(answeredCount / (totalQuestions || 1)) * 100}%`,
+                backgroundColor: '#10b981',
+                transition: 'width 0.3s ease',
+              }}
+            />
+          </div>
+
+          {/* Resumption Banner Notice */}
+          {resumeNotice && (
+            <div
+              style={{
+                padding: '0.45rem 1rem',
+                backgroundColor: '#ecfdf5',
+                borderBottom: '1px solid #a7f3d0',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                fontSize: '0.8rem',
+                color: '#065f46',
+                flexShrink: 0,
+              }}
+            >
+              <span>{resumeNotice}</span>
+              <button
+                type="button"
+                onClick={() => setResumeNotice(null)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#047857', fontWeight: 700 }}
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
+          {/* Submission Error Banner with Direct Retry (Requirement #3) */}
+          {submissionError && (
+            <div
+              style={{
+                padding: '0.65rem 1rem',
+                backgroundColor: '#fef2f2',
+                borderBottom: '1px solid #fecaca',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                fontSize: '0.825rem',
+                color: '#dc2626',
+                flexShrink: 0,
+                flexWrap: 'wrap',
+                gap: '0.5rem',
+              }}
+            >
+              <span>⚠️ {submissionError}</span>
+              <Button
+                variant="danger"
+                size="sm"
+                onClick={handleFinalSubmit}
+                disabled={isSubmitting}
+              >
+                {isSubmitting ? 'Retrying...' : 'Retry Submit'}
+              </Button>
+            </div>
+          )}
+
+          {/* Main Area */}
+          <div
+            style={{
+              flex: 1,
+              backgroundColor: '#f8fafc',
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column',
+              position: 'relative',
+            }}
+          >
+            {examSubmitted && examScoreSummary ? (
+              /* Post-Submission Result Preview Card */
+              <div
+                style={{
+                  flex: 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: '1.5rem',
+                  overflowY: 'auto',
+                }}
+              >
                 <div
                   style={{
-                    maxWidth: '480px',
-                    margin: '1.75rem auto',
-                    padding: '1.25rem',
-                    backgroundColor: 'var(--color-slate-50)',
-                    borderRadius: 'var(--radius-md)',
+                    backgroundColor: '#ffffff',
+                    borderRadius: 'var(--radius-xl)',
                     border: '1px solid var(--color-slate-200)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '1rem',
+                    boxShadow: 'var(--shadow-lg)',
+                    padding: '2.5rem 2rem',
+                    maxWidth: '560px',
+                    width: '100%',
                     textAlign: 'center',
                   }}
                 >
                   <div
                     style={{
+                      width: '64px',
+                      height: '64px',
+                      borderRadius: '50%',
+                      backgroundColor: '#ecfdf5',
+                      color: '#059669',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      margin: '0 auto 1.25rem',
+                    }}
+                  >
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+                      <polyline points="22 4 12 14.01 9 11.01" />
+                    </svg>
+                  </div>
+
+                  <h2 style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--color-slate-900)' }}>
+                    Examination Submitted Successfully!
+                  </h2>
+                  <p style={{ fontSize: '0.9rem', color: 'var(--color-slate-600)', marginTop: '0.35rem' }}>
+                    Your responses have been recorded and timestamped in the ROYAL COLLEGE OF NURSING SWAT academic repository.
+                  </p>
+
+                  <div
+                    style={{
+                      margin: '1.5rem 0',
+                      padding: '1.25rem',
+                      backgroundColor: 'var(--color-slate-50)',
+                      borderRadius: 'var(--radius-md)',
+                      border: '1px solid var(--color-slate-200)',
                       display: 'grid',
-                      gridTemplateColumns: 'repeat(3, 1fr)',
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(100px, 1fr))',
                       gap: '0.75rem',
                     }}
                   >
                     <div>
-                      <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)' }}>Questions</span>
-                      <div style={{ fontSize: '1.3rem', fontWeight: 800, color: 'var(--color-slate-900)' }}>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--color-slate-500)' }}>Questions</span>
+                      <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--color-slate-900)' }}>
                         {examScoreSummary.totalQuestions ?? totalQuestions}
                       </div>
                     </div>
                     <div>
-                      <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)' }}>Answered</span>
-                      <div style={{ fontSize: '1.3rem', fontWeight: 800, color: '#047857' }}>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--color-slate-500)' }}>Answered</span>
+                      <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#047857' }}>
                         {examScoreSummary.answersCount ?? answeredCount}
                       </div>
                     </div>
                     <div>
-                      <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)' }}>Status</span>
-                      <div style={{ fontSize: '0.95rem', fontWeight: 800, color: '#d97706', marginTop: '0.25rem' }}>
-                        PENDING
+                      <span style={{ fontSize: '0.75rem', color: 'var(--color-slate-500)' }}>Status</span>
+                      <div style={{ fontSize: '0.9rem', fontWeight: 800, color: '#059669', marginTop: '0.2rem' }}>
+                        SUBMITTED
                       </div>
                     </div>
                   </div>
 
-                  <div
-                    style={{
-                      backgroundColor: '#fffbeb',
-                      border: '1px solid #fef3c7',
-                      borderRadius: 'var(--radius-sm)',
-                      padding: '0.75rem',
-                      fontSize: '0.8rem',
-                      color: '#92400e',
-                      lineHeight: 1.45,
-                    }}
-                  >
-                    Your submission has been securely recorded. Under examination rules, final scores and official transcripts are published once verified by your course examiner.
+                  <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', justifyContent: 'center' }}>
+                    <Button
+                      variant="primary"
+                      size="lg"
+                      onClick={() => {
+                        if (document.fullscreenElement) {
+                          document.exitFullscreen().catch(() => {});
+                        }
+                        navigate('/student/results');
+                      }}
+                      style={{ backgroundColor: '#059669', borderColor: '#059669', fontWeight: 700 }}
+                    >
+                      View Academic Results &amp; Transcripts →
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      size="lg"
+                      onClick={() => {
+                        setTakingExam(null);
+                        if (document.fullscreenElement) {
+                          document.exitFullscreen().catch(() => {});
+                        }
+                      }}
+                      style={{ fontWeight: 600 }}
+                    >
+                      Return to Examinations Dashboard
+                    </Button>
                   </div>
                 </div>
-              ) : (
-                <div
-                  style={{
-                    maxWidth: '460px',
-                    margin: '1.75rem auto',
-                    padding: '1.25rem',
-                    backgroundColor: 'var(--color-slate-50)',
-                    borderRadius: 'var(--radius-md)',
-                    border: '1px solid var(--color-slate-200)',
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(3, 1fr)',
-                    gap: '1rem',
-                    textAlign: 'center',
-                  }}
-                >
-                  <div>
-                    <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)' }}>Raw Score</span>
-                    <div style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--color-slate-900)' }}>
-                      {examScoreSummary.score} / {examScoreSummary.total}
-                    </div>
-                  </div>
-                  <div>
-                    <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)' }}>Percentage</span>
-                    <div style={{ fontSize: '1.4rem', fontWeight: 800, color: '#047857' }}>
-                      {examScoreSummary.percentage}%
-                    </div>
-                  </div>
-                  <div>
-                    <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)' }}>Outcome</span>
-                    <div style={{ fontSize: '1.4rem', fontWeight: 800, color: examScoreSummary.passed ? '#059669' : '#dc2626' }}>
-                      {examScoreSummary.passed ? 'PASSED' : 'FAILED'}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', marginTop: '1.5rem' }}>
-                <Button variant="primary" onClick={() => setTakingExam(null)} style={{ backgroundColor: '#0f2744' }}>
-                  Return to Exams List
-                </Button>
               </div>
-            </div>
-          ) : isLoadingQuestions ? (
-            <Card style={{ padding: '3rem', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem' }}>
-              <LoadingSpinner size="lg" />
-              <div style={{ fontSize: '1.05rem', fontWeight: 600, color: 'var(--color-slate-800)' }}>
-                Preparing examination paper &amp; question palette...
+            ) : isLoadingQuestions ? (
+              <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <Card style={{ padding: '3rem', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem' }}>
+                  <LoadingSpinner size="lg" />
+                  <div style={{ fontSize: '1.05rem', fontWeight: 600, color: 'var(--color-slate-800)' }}>
+                    Preparing examination paper &amp; question palette...
+                  </div>
+                  <p style={{ fontSize: '0.85rem', color: 'var(--color-slate-500)', maxWidth: '400px' }}>
+                    Loading questions securely from the examination repository.
+                  </p>
+                </Card>
               </div>
-              <p style={{ fontSize: '0.85rem', color: 'var(--color-slate-500)', maxWidth: '400px' }}>
-                Loading questions securely from the examination bank.
-              </p>
-            </Card>
-          ) : examQuestionsError ? (
-            <Card style={{ padding: '2rem', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-              <Alert type="warning">{examQuestionsError}</Alert>
-              <div style={{ display: 'flex', justifyContent: 'center' }}>
-                <Button variant="primary" onClick={() => setTakingExam(null)} style={{ backgroundColor: '#0f2744' }}>
-                  Return to Exams List
-                </Button>
+            ) : examQuestionsError ? (
+              <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}>
+                <Card style={{ padding: '2rem', display: 'flex', flexDirection: 'column', gap: '1.25rem', maxWidth: '500px' }}>
+                  <Alert type="warning">{examQuestionsError}</Alert>
+                  <div style={{ display: 'flex', justifyContent: 'center' }}>
+                    <Button variant="primary" onClick={() => setTakingExam(null)} style={{ backgroundColor: '#0f2744' }}>
+                      Return to Exams List
+                    </Button>
+                  </div>
+                </Card>
               </div>
-            </Card>
-          ) : (
-            /* Active Exam Layout: Timer, Question, Palette */
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-              {/* Header Bar: Live Timer & Progress Bar */}
+            ) : (
+              /* Two-Column Question & Palette Layout (No-Scroll Fit on Laptop, Fluid on Mobile) */
               <div
+                className="rcns-exam-layout-grid"
                 style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  backgroundColor: '#0f2744',
-                  color: '#ffffff',
+                  flex: 1,
+                  display: 'grid',
+                  gridTemplateColumns: '1fr 280px',
+                  gap: '1rem',
                   padding: '0.85rem 1.25rem',
-                  borderRadius: 'var(--radius-md)',
+                  overflow: 'hidden',
+                  boxSizing: 'border-box',
                 }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <span style={{ fontSize: '0.85rem', color: '#94a3b8' }}>Question:</span>
-                  <strong style={{ fontSize: '1rem', color: '#ffffff' }}>
-                    {currentQuestionIndex + 1} of {totalQuestions}
-                  </strong>
-                  <span style={{ fontSize: '0.8rem', color: '#94a3b8', marginLeft: '0.5rem' }}>
-                    ({answeredCount} answered)
-                  </span>
-                </div>
-
-                {/* Countdown Timer Badge */}
+                {/* Left Column: Question Card & Options */}
                 <div
+                  className="rcns-exam-left-column"
                   style={{
+                    backgroundColor: '#ffffff',
+                    borderRadius: 'var(--radius-lg)',
+                    border: '1px solid var(--color-slate-200)',
+                    boxShadow: 'var(--shadow-sm)',
+                    padding: '1.1rem 1.25rem',
                     display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.5rem',
-                    backgroundColor: timeLeftSeconds < 300 ? '#dc2626' : 'rgba(255, 255, 255, 0.15)',
-                    padding: '0.35rem 0.85rem',
-                    borderRadius: 'var(--radius-full)',
-                    fontWeight: 700,
-                    fontFamily: 'monospace',
-                    fontSize: '1.05rem',
+                    flexDirection: 'column',
+                    justifyContent: 'space-between',
+                    overflow: 'hidden',
+                    height: '100%',
+                    boxSizing: 'border-box',
                   }}
                 >
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <circle cx="12" cy="12" r="10" />
-                    <polyline points="12 6 12 12 16 14" />
-                  </svg>
-                  <span>{formatTimer(timeLeftSeconds)}</span>
-                </div>
-              </div>
-
-              {/* Progress Bar */}
-              <div style={{ width: '100%', height: '6px', backgroundColor: 'var(--color-slate-100)', borderRadius: 'var(--radius-full)', overflow: 'hidden' }}>
-                <div
-                  style={{
-                    width: `${(answeredCount / (totalQuestions || 1)) * 100}%`,
-                    height: '100%',
-                    backgroundColor: '#10b981',
-                    transition: 'width 0.3s ease',
-                  }}
-                />
-              </div>
-
-              {/* Section Switcher (Only visible if exam has written questions) */}
-              {writtenQuestions.length > 0 && (
-                <div style={{ display: 'flex', gap: '0.5rem', backgroundColor: 'var(--color-slate-100)', padding: '0.35rem', borderRadius: 'var(--radius-md)' }}>
-                  <button
-                    type="button"
-                    onClick={() => setActiveExamSection('mcq')}
-                    style={{
-                      flex: 1,
-                      padding: '0.6rem 1rem',
-                      borderRadius: 'var(--radius-sm)',
-                      border: 'none',
-                      backgroundColor: activeExamSection === 'mcq' ? '#ffffff' : 'transparent',
-                      fontWeight: activeExamSection === 'mcq' ? 800 : 600,
-                      color: activeExamSection === 'mcq' ? '#0f2744' : 'var(--color-slate-600)',
-                      boxShadow: activeExamSection === 'mcq' ? 'var(--shadow-xs)' : 'none',
-                      cursor: 'pointer',
-                      fontSize: '0.9rem',
-                    }}
-                  >
-                    📝 Section A: MCQs ({examQuestions.length})
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setActiveExamSection('written')}
-                    style={{
-                      flex: 1,
-                      padding: '0.6rem 1rem',
-                      borderRadius: 'var(--radius-sm)',
-                      border: 'none',
-                      backgroundColor: activeExamSection === 'written' ? '#ffffff' : 'transparent',
-                      fontWeight: activeExamSection === 'written' ? 800 : 600,
-                      color: activeExamSection === 'written' ? '#0f2744' : 'var(--color-slate-600)',
-                      boxShadow: activeExamSection === 'written' ? 'var(--shadow-xs)' : 'none',
-                      cursor: 'pointer',
-                      fontSize: '0.9rem',
-                    }}
-                  >
-                    ✍️ Section B &amp; C: Written Questions ({writtenQuestions.length})
-                  </button>
-                </div>
-              )}
-
-              {/* Active Section Body */}
-              {activeExamSection === 'written' && writtenQuestions.length > 0 ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-                  <WrittenQuestionsSection
-                    questions={writtenQuestions}
-                    writtenAnswers={writtenAnswers}
-                    onAnswerChange={handleWrittenAnswerChange}
-                  />
-
-                  <div
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      padding: '1rem',
-                      backgroundColor: 'var(--color-slate-50)',
-                      borderRadius: 'var(--radius-md)',
-                      border: '1px solid var(--color-slate-200)',
-                      marginTop: '0.5rem',
-                    }}
-                  >
-                    <Button variant="outline" size="sm" onClick={() => setActiveExamSection('mcq')}>
-                      ← Back to MCQs Section
-                    </Button>
-                    <Button variant="danger" size="md" onClick={() => setShowSubmitConfirm(true)}>
-                      Finish &amp; Submit Entire Exam
-                    </Button>
-                  </div>
-                </div>
-              ) : (
-                /* Question Screen Two-Column: Question Body (left) + Question Palette (right) */
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 240px', gap: '1.5rem' }}>
-                  {/* Left: Active Question */}
-                  {currentQuestion && (
-                    <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '1.5rem' }}>
-                      <div>
-                        {/* Question Top Metadata */}
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-                        <Badge variant="primary">Question {currentQuestionIndex + 1}</Badge>
-                        <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--color-slate-600)' }}>
-                          Marks: {currentQuestion.marks}
-                        </span>
-                      </div>
-
-                      {/* Question Text */}
-                      <div
+                  {/* Section Switcher (if written questions exist) */}
+                  {writtenQuestions.length > 0 && (
+                    <div style={{ display: 'flex', gap: '0.5rem', backgroundColor: 'var(--color-slate-100)', padding: '0.25rem', borderRadius: 'var(--radius-md)', marginBottom: '0.65rem', flexShrink: 0 }}>
+                      <button
+                        type="button"
+                        onClick={() => setActiveExamSection('mcq')}
                         style={{
-                          fontSize: '1.05rem',
-                          fontWeight: 600,
-                          color: 'var(--color-slate-900)',
-                          lineHeight: 1.5,
-                          padding: '1rem',
-                          backgroundColor: 'var(--color-slate-50)',
-                          borderRadius: 'var(--radius-md)',
-                          border: '1px solid var(--color-slate-200)',
+                          flex: 1,
+                          padding: '0.45rem 0.75rem',
+                          borderRadius: 'var(--radius-sm)',
+                          border: 'none',
+                          backgroundColor: activeExamSection === 'mcq' ? '#ffffff' : 'transparent',
+                          fontWeight: activeExamSection === 'mcq' ? 800 : 600,
+                          color: activeExamSection === 'mcq' ? '#0f2744' : 'var(--color-slate-600)',
+                          boxShadow: activeExamSection === 'mcq' ? 'var(--shadow-xs)' : 'none',
+                          cursor: 'pointer',
+                          fontSize: '0.82rem',
                         }}
                       >
-                        {currentQuestion.question}
+                        📝 Section A: MCQs ({examQuestions.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setActiveExamSection('written')}
+                        style={{
+                          flex: 1,
+                          padding: '0.45rem 0.75rem',
+                          borderRadius: 'var(--radius-sm)',
+                          border: 'none',
+                          backgroundColor: activeExamSection === 'written' ? '#ffffff' : 'transparent',
+                          fontWeight: activeExamSection === 'written' ? 800 : 600,
+                          color: activeExamSection === 'written' ? '#0f2744' : 'var(--color-slate-600)',
+                          boxShadow: activeExamSection === 'written' ? 'var(--shadow-xs)' : 'none',
+                          cursor: 'pointer',
+                          fontSize: '0.82rem',
+                        }}
+                      >
+                        ✍️ Section B &amp; C: Written ({writtenQuestions.length})
+                      </button>
+                    </div>
+                  )}
+
+                  {activeExamSection === 'written' && writtenQuestions.length > 0 ? (
+                    <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '1rem', paddingRight: '4px' }}>
+                      <WrittenQuestionsSection
+                        questions={writtenQuestions}
+                        writtenAnswers={writtenAnswers}
+                        onAnswerChange={handleWrittenAnswerChange}
+                      />
+
+                      {/* Prominent Submission & Navigation Bar inside Written Section (Requirement #2) */}
+                      <div
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          flexWrap: 'wrap',
+                          gap: '0.75rem',
+                          padding: '1rem',
+                          backgroundColor: '#f8fafc',
+                          borderRadius: 'var(--radius-md)',
+                          border: '1px solid var(--color-slate-200)',
+                          marginTop: '0.5rem',
+                          marginBottom: '0.5rem',
+                        }}
+                      >
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setActiveExamSection('mcq')}
+                          disabled={examQuestions.length === 0}
+                        >
+                          ← Return to Section A: MCQs
+                        </Button>
+                        <Button
+                          variant="danger"
+                          size="md"
+                          onClick={() => {
+                            console.log('[StudentExamsPage] Written section bottom Submit Exam button clicked');
+                            setShowSubmitConfirm(true);
+                          }}
+                          disabled={isSubmitting}
+                          style={{ fontWeight: 700 }}
+                        >
+                          {isSubmitting ? 'Submitting...' : 'Finish & Submit Entire Exam →'}
+                        </Button>
+                      </div>
+                    </div>
+                  ) : currentQuestion ? (
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', overflow: 'hidden' }}>
+                      {/* Question Top Meta */}
+                      <div style={{ flexShrink: 0 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
+                          <Badge variant="primary">Question {currentQuestionIndex + 1} of {totalQuestions}</Badge>
+                          <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--color-slate-600)' }}>
+                            Marks: {currentQuestion.marks}
+                          </span>
+                        </div>
+
+                        {/* Question Text */}
+                        <div
+                          style={{
+                            fontSize: '1rem',
+                            fontWeight: 600,
+                            color: 'var(--color-slate-900)',
+                            lineHeight: 1.4,
+                            padding: '0.75rem 0.9rem',
+                            backgroundColor: 'var(--color-slate-50)',
+                            borderRadius: 'var(--radius-md)',
+                            border: '1px solid var(--color-slate-200)',
+                            maxHeight: '120px',
+                            overflowY: 'auto',
+                          }}
+                        >
+                          {currentQuestion.question}
+                        </div>
                       </div>
 
-                      {/* Multiple Choice Options */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginTop: '1.25rem' }}>
+                      {/* Options List: sized to fit laptop viewport */}
+                      <div
+                        style={{
+                          flex: 1,
+                          overflowY: 'auto',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '0.45rem',
+                          margin: '0.5rem 0',
+                          paddingRight: '2px',
+                        }}
+                      >
                         {currentQuestion.options.map((option, idx) => {
                           const optText = typeof option === 'string' ? option : option.text;
                           const isSelected = selectedAnswers[currentQuestionIndex] === idx;
@@ -876,116 +1660,154 @@ export const StudentExamsPage: React.FC = () => {
                               style={{
                                 display: 'flex',
                                 alignItems: 'center',
-                                gap: '0.85rem',
-                                padding: '0.85rem 1rem',
+                                gap: '0.75rem',
+                                padding: '0.6rem 0.85rem',
                                 borderRadius: 'var(--radius-md)',
-                                border: `2px solid ${isSelected ? 'var(--color-primary-800)' : 'var(--color-slate-200)'}`,
-                                backgroundColor: isSelected ? 'var(--color-primary-50)' : '#ffffff',
+                                border: `2px solid ${isSelected ? '#0f2744' : 'var(--color-slate-200)'}`,
+                                backgroundColor: isSelected ? '#eff6ff' : '#ffffff',
                                 cursor: 'pointer',
-                                transition: 'all var(--transition-fast)',
+                                transition: 'all 0.15s ease',
                               }}
                             >
                               <div
                                 style={{
-                                  width: '32px',
-                                  height: '32px',
+                                  width: '28px',
+                                  height: '28px',
                                   borderRadius: '50%',
-                                  backgroundColor: isSelected ? 'var(--color-primary-800)' : 'var(--color-slate-100)',
+                                  backgroundColor: isSelected ? '#0f2744' : 'var(--color-slate-100)',
                                   color: isSelected ? '#ffffff' : 'var(--color-slate-700)',
                                   display: 'flex',
                                   alignItems: 'center',
                                   justifyContent: 'center',
                                   fontWeight: 700,
-                                  fontSize: '0.85rem',
+                                  fontSize: '0.8rem',
                                   flexShrink: 0,
                                 }}
                               >
                                 {optionLetter}
                               </div>
-
-                              <span style={{ fontSize: '0.925rem', color: 'var(--color-slate-800)', fontWeight: isSelected ? 600 : 400 }}>
+                              <span style={{ fontSize: '0.9rem', color: 'var(--color-slate-800)', fontWeight: isSelected ? 600 : 400 }}>
                                 {optText}
                               </span>
                             </div>
                           );
                         })}
                       </div>
-                    </div>
 
-                    {/* Question Controls Bottom */}
-                    <div
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        paddingTop: '1rem',
-                        borderTop: '1px solid var(--color-slate-200)',
-                        flexWrap: 'wrap',
-                        gap: '0.5rem',
-                      }}
-                    >
-                      <div style={{ display: 'flex', gap: '0.5rem' }}>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setCurrentQuestionIndex((prev) => Math.max(0, prev - 1))}
-                          disabled={currentQuestionIndex === 0}
-                        >
-                          ← Previous
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setCurrentQuestionIndex((prev) => Math.min(totalQuestions - 1, prev + 1))}
-                          disabled={currentQuestionIndex === totalQuestions - 1}
-                        >
-                          Next →
-                        </Button>
-                      </div>
-
-                      <div style={{ display: 'flex', gap: '0.5rem' }}>
-                        <Button
-                          variant={flaggedQuestions[currentQuestionIndex] ? 'warning' : 'ghost'}
-                          size="sm"
-                          onClick={handleToggleFlag}
-                        >
-                          {flaggedQuestions[currentQuestionIndex] ? '🚩 Flagged' : '🏳 Flag for Review'}
-                        </Button>
-                        {selectedAnswers[currentQuestionIndex] !== undefined && (
-                          <Button variant="ghost" size="sm" onClick={handleClearAnswer}>
-                            Clear Answer
+                      {/* Controls Bottom Bar: Ubiquitous Submit Exam Access (Requirement #2) */}
+                      <div
+                        style={{
+                          flexShrink: 0,
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          paddingTop: '0.65rem',
+                          borderTop: '1px solid var(--color-slate-200)',
+                          flexWrap: 'wrap',
+                          gap: '0.4rem',
+                        }}
+                      >
+                        <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setCurrentQuestionIndex((prev) => Math.max(0, prev - 1))}
+                            disabled={currentQuestionIndex === 0}
+                          >
+                            ← Previous
                           </Button>
-                        )}
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setCurrentQuestionIndex((prev) => Math.min(totalQuestions - 1, prev + 1))}
+                            disabled={currentQuestionIndex === totalQuestions - 1}
+                          >
+                            Next →
+                          </Button>
+                          {writtenQuestions.length > 0 && (
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              onClick={() => setActiveExamSection('written')}
+                            >
+                              Go to Written Section →
+                            </Button>
+                          )}
+                          <Button
+                            variant="danger"
+                            size="sm"
+                            onClick={() => setShowSubmitConfirm(true)}
+                            disabled={isSubmitting}
+                            style={{ fontWeight: 700 }}
+                            title="Submit your exam paper at any time"
+                          >
+                            ✓ Submit Exam
+                          </Button>
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '0.4rem' }}>
+                          <Button
+                            variant={flaggedQuestions[currentQuestionIndex] ? 'warning' : 'ghost'}
+                            size="sm"
+                            onClick={handleToggleFlag}
+                          >
+                            {flaggedQuestions[currentQuestionIndex] ? '🚩 Flagged' : '🏳 Flag'}
+                          </Button>
+                          {selectedAnswers[currentQuestionIndex] !== undefined && (
+                            <Button variant="ghost" size="sm" onClick={handleClearAnswer}>
+                              Clear
+                            </Button>
+                          )}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                )}
+                  ) : null}
+                </div>
 
-                {/* Right: Question Navigator Palette */}
+                {/* Right Column: Question Palette & Finish Button */}
                 <div
+                  className={`rcns-palette-sidebar ${mobilePaletteOpen ? 'palette-mobile-show' : ''}`}
                   style={{
-                    backgroundColor: 'var(--color-slate-50)',
-                    borderRadius: 'var(--radius-md)',
+                    backgroundColor: '#ffffff',
+                    borderRadius: 'var(--radius-lg)',
                     border: '1px solid var(--color-slate-200)',
-                    padding: '1rem',
+                    padding: '0.9rem',
                     display: 'flex',
                     flexDirection: 'column',
                     justifyContent: 'space-between',
+                    height: '100%',
+                    boxSizing: 'border-box',
+                    overflow: 'hidden',
                   }}
                 >
-                  <div>
-                    <h4 style={{ fontSize: '0.85rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--color-slate-700)', marginBottom: '0.75rem' }}>
-                      Question Palette
-                    </h4>
+                  <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', flex: 1 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                      <h4 style={{ fontSize: '0.8rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--color-slate-700)', margin: 0 }}>
+                        Question Palette
+                      </h4>
+                      <button
+                        type="button"
+                        className="palette-close-mobile"
+                        onClick={() => setMobilePaletteOpen(false)}
+                        style={{ background: 'none', border: 'none', fontSize: '1.1rem', cursor: 'pointer', color: '#64748b' }}
+                      >
+                        ✕
+                      </button>
+                    </div>
 
-                    {/* Grid Palette */}
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.4rem' }}>
-                      {currentExamQuestions.length === 0 ? (
-                        <div style={{ gridColumn: 'span 4', textAlign: 'center', padding: '1rem 0', fontSize: '0.8rem', color: 'var(--color-slate-500)' }}>
-                          No questions available
-                        </div>
-                      ) : (
-                        currentExamQuestions.map((_, qIdx) => {
+                    {/* Question Numbers Grid (Smooth internal scroll for large sets) */}
+                    <div
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(4, 1fr)',
+                        gap: '0.35rem',
+                        overflowY: 'auto',
+                        paddingRight: '3px',
+                        flex: 1,
+                        maxHeight: 'calc(100vh - 280px)',
+                      }}
+                    >
+                      {currentExamQuestions.map((_, qIdx) => {
                         const isAnswered = selectedAnswers[qIdx] !== undefined;
                         const isCurrent = currentQuestionIndex === qIdx;
                         const isFlagged = flaggedQuestions[qIdx];
@@ -1012,79 +1834,321 @@ export const StudentExamsPage: React.FC = () => {
                           <button
                             key={qIdx}
                             type="button"
-                            onClick={() => setCurrentQuestionIndex(qIdx)}
+                            onClick={() => {
+                              setCurrentQuestionIndex(qIdx);
+                              setMobilePaletteOpen(false);
+                            }}
                             style={{
-                              height: '34px',
+                              height: '32px',
                               borderRadius: 'var(--radius-sm)',
                               border,
                               backgroundColor: bg,
                               color,
                               fontWeight: isCurrent ? 800 : 600,
-                              fontSize: '0.8rem',
+                              fontSize: '0.78rem',
                               cursor: 'pointer',
+                              transition: 'all 0.15s ease',
                             }}
                           >
                             {qIdx + 1}
                           </button>
                         );
-                      }))}
+                      })}
                     </div>
 
-                    {/* Legend */}
-                    <div style={{ marginTop: '1.25rem', fontSize: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.35rem', color: 'var(--color-slate-600)' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                        <span style={{ width: '10px', height: '10px', backgroundColor: '#059669', borderRadius: '2px' }} />
+                    {/* Palette Legend */}
+                    <div style={{ marginTop: '0.65rem', fontSize: '0.72rem', display: 'flex', flexDirection: 'column', gap: '0.2rem', color: 'var(--color-slate-600)', flexShrink: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                        <span style={{ width: '8px', height: '8px', backgroundColor: '#059669', borderRadius: '2px' }} />
                         <span>Answered ({answeredCount})</span>
                       </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                        <span style={{ width: '10px', height: '10px', backgroundColor: '#d97706', borderRadius: '2px' }} />
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                        <span style={{ width: '8px', height: '8px', backgroundColor: '#d97706', borderRadius: '2px' }} />
                         <span>Flagged ({Object.keys(flaggedQuestions).filter((k) => flaggedQuestions[Number(k)]).length})</span>
                       </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                        <span style={{ width: '10px', height: '10px', backgroundColor: '#ffffff', border: '1px solid #94a3b8', borderRadius: '2px' }} />
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                        <span style={{ width: '8px', height: '8px', backgroundColor: '#ffffff', border: '1px solid #94a3b8', borderRadius: '2px' }} />
                         <span>Unanswered ({totalQuestions - answeredCount})</span>
                       </div>
                     </div>
                   </div>
 
-                  {/* Submit Exam Button */}
-                  <div style={{ marginTop: '1.5rem' }}>
+                  {/* Finish & Submit Button: ONLY official way to exit (Requirement #4) */}
+                  <div style={{ marginTop: '0.75rem', flexShrink: 0 }}>
                     <Button
                       variant="danger"
                       fullWidth
-                      onClick={() => setShowSubmitConfirm(true)}
+                      size="sm"
+                      onClick={() => {
+                        console.log('[StudentExamsPage] MCQ palette Submit Exam button clicked');
+                        setShowSubmitConfirm(true);
+                      }}
+                      disabled={isSubmitting}
+                      style={{ fontWeight: 700 }}
                     >
-                      Finish &amp; Submit Exam
+                      {isSubmitting ? 'Submitting...' : 'Finish & Submit Entire Exam'}
                     </Button>
                   </div>
                 </div>
               </div>
             )}
+          </div>
+
+          {/* Security Alert Modal for Tab Switching (Requirement #1) */}
+          {tabSwitchAlertOpen && (
+            <div
+              style={{
+                position: 'fixed',
+                inset: 0,
+                backgroundColor: 'rgba(15, 23, 42, 0.92)',
+                zIndex: 100002,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '1.5rem',
+                backdropFilter: 'blur(8px)',
+              }}
+            >
+              <div
+                style={{
+                  backgroundColor: '#ffffff',
+                  borderRadius: 'var(--radius-xl)',
+                  padding: '2rem',
+                  maxWidth: '500px',
+                  width: '100%',
+                  textAlign: 'center',
+                  boxShadow: 'var(--shadow-xl)',
+                  border: '2px solid #ef4444',
+                }}
+              >
+                <div
+                  style={{
+                    width: '56px',
+                    height: '56px',
+                    borderRadius: '50%',
+                    backgroundColor: '#fef2f2',
+                    color: '#ef4444',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    margin: '0 auto 1.25rem',
+                    fontSize: '1.75rem',
+                  }}
+                >
+                  ⚠️
+                </div>
+                <h3 style={{ fontSize: '1.3rem', fontWeight: 800, color: '#0f172a', marginBottom: '0.5rem' }}>
+                  Examination Security Warning
+                </h3>
+                <p style={{ fontSize: '0.875rem', color: '#475569', lineHeight: 1.5, marginBottom: '1.25rem' }}>
+                  Tab switching or window minimization was detected. Under KMU institutional rules, all window changes are recorded for proctor review.
+                </p>
+                <div
+                  style={{
+                    backgroundColor: '#f8fafc',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: 'var(--radius-md)',
+                    padding: '0.85rem',
+                    marginBottom: '1.5rem',
+                    display: 'flex',
+                    justifyContent: 'space-around',
+                    fontSize: '0.85rem',
+                  }}
+                >
+                  <div>
+                    <span style={{ color: '#64748b', display: 'block', fontSize: '0.72rem' }}>Answers Preserved</span>
+                    <strong style={{ color: '#059669', fontSize: '1.05rem' }}>
+                      {answeredCount + Object.values(writtenAnswers).filter((a) => a.answerText && a.answerText.trim()).length}
+                    </strong>
+                  </div>
+                  <div>
+                    <span style={{ color: '#64748b', display: 'block', fontSize: '0.72rem' }}>Time Remaining</span>
+                    <strong style={{ color: '#0f2744', fontSize: '1.05rem' }}>{formatTimer(timeLeftSeconds)}</strong>
+                  </div>
+                  <div>
+                    <span style={{ color: '#64748b', display: 'block', fontSize: '0.72rem' }}>Violation Count</span>
+                    <strong style={{ color: '#dc2626', fontSize: '1.05rem' }}>{tabSwitchCount}</strong>
+                  </div>
+                </div>
+                <Button
+                  variant="primary"
+                  size="lg"
+                  fullWidth
+                  onClick={() => {
+                    setTabSwitchAlertOpen(false);
+                    if (!document.fullscreenElement) {
+                      document.documentElement.requestFullscreen().catch(() => {});
+                    }
+                  }}
+                  style={{ backgroundColor: '#0f2744' }}
+                >
+                  Resume Examination Now
+                </Button>
+              </div>
             </div>
           )}
-        </Modal>
+
+          <style>{`
+            .palette-close-mobile {
+              display: none;
+            }
+            .exam-mobile-palette-btn {
+              display: none;
+            }
+            @media (max-width: 900px) {
+              .rcns-exam-layout-grid {
+                grid-template-columns: 1fr !important;
+                overflow-y: auto !important;
+                height: auto !important;
+              }
+              .rcns-exam-left-column {
+                height: auto !important;
+                min-height: calc(100vh - 120px) !important;
+              }
+              .exam-mobile-palette-btn {
+                display: inline-flex !important;
+              }
+              .exam-header-qcount {
+                display: none !important;
+              }
+              .rcns-palette-sidebar {
+                position: fixed !important;
+                inset: 0 !important;
+                z-index: 100000 !important;
+                transform: translateY(100%) !important;
+                transition: transform 0.25s ease !important;
+              }
+              .palette-mobile-show {
+                transform: translateY(0) !important;
+              }
+              .palette-close-mobile {
+                display: block !important;
+              }
+            }
+            @media (max-width: 600px) {
+              .exam-header-fullscreen-btn {
+                display: none !important;
+              }
+            }
+          `}</style>
+        </div>
       )}
 
-      {/* Submit Confirmation Dialog */}
+      {/* Full-Screen Submission Loading Overlay: prevents repeated clicks and provides clear feedback */}
+      {isSubmitting && (
+        <div
+          id="exam-submitting-overlay"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(15, 23, 42, 0.82)',
+            backdropFilter: 'blur(4px)',
+            zIndex: 100060,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '1.5rem',
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: '#ffffff',
+              borderRadius: 'var(--radius-xl)',
+              padding: '2.5rem 2rem',
+              maxWidth: '440px',
+              width: '100%',
+              textAlign: 'center',
+              boxShadow: 'var(--shadow-xl)',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: '1.25rem',
+            }}
+          >
+            <LoadingSpinner size="lg" />
+            <div>
+              <h3 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--color-slate-900)', margin: '0 0 0.5rem' }}>
+                Submitting Examination...
+              </h3>
+              <p style={{ fontSize: '0.875rem', color: 'var(--color-slate-600)', margin: 0, lineHeight: 1.5 }}>
+                Recording and timestamping your responses to the institutional server. Please do not close or refresh this page.
+              </p>
+            </div>
+            <div
+              style={{
+                fontSize: '0.78rem',
+                color: 'var(--color-slate-500)',
+                backgroundColor: 'var(--color-slate-50)',
+                padding: '0.5rem 1rem',
+                borderRadius: 'var(--radius-md)',
+                width: '100%',
+              }}
+            >
+              ROYAL COLLEGE OF NURSING SWAT • Examination Repository
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Submit Confirmation Dialog (Allows submission anytime with time remaining) */}
       <ConfirmDialog
         isOpen={showSubmitConfirm}
-        onClose={() => setShowSubmitConfirm(false)}
+        onClose={() => !isSubmitting && setShowSubmitConfirm(false)}
         onConfirm={handleFinalSubmit}
         title="Confirm Final Exam Submission"
+        isLoading={isSubmitting}
+        zIndex={100050}
         message={
-          writtenQuestions.length > 0
-            ? `You have answered ${answeredCount} of ${totalQuestions} MCQs and ${
-                Object.values(writtenAnswers).filter((a) => a.answerText && a.answerText.trim().length > 0).length
-              } of ${writtenQuestions.length} Written Questions. Once submitted, your answers will be locked.`
-            : `You have answered ${answeredCount} of ${totalQuestions} questions. ${
-                totalQuestions - answeredCount > 0
-                  ? `Warning: ${totalQuestions - answeredCount} question(s) remain unanswered.`
-                  : 'All questions have been answered.'
-              } Once submitted, you cannot change your answers.`
+          isSubmitting
+            ? 'Submitting your examination responses to the institutional server, please wait...'
+            : (() => {
+                const totalMCQs = totalQuestions;
+                const answeredMCQs = answeredCount;
+                const unansweredMCQs = Math.max(0, totalMCQs - answeredMCQs);
+                const totalWritten = writtenQuestions.length;
+                const answeredWritten = Object.values(writtenAnswers).filter(
+                  (a) => a.answerText && a.answerText.trim().length > 0
+                ).length;
+                const unansweredWritten = Math.max(0, totalWritten - answeredWritten);
+                const totalUnanswered = unansweredMCQs + unansweredWritten;
+
+                let statsDetail = `Questions Answered: ${answeredMCQs} of ${totalMCQs} MCQs`;
+                if (totalWritten > 0) {
+                  statsDetail += `, and ${answeredWritten} of ${totalWritten} Written Questions`;
+                }
+
+                const warningDetail =
+                  totalUnanswered > 0
+                    ? `\n\n⚠️ Note: You have ${totalUnanswered} unanswered question(s) remaining.`
+                    : '\n\nAll questions have been answered.';
+
+                const timeDetail = `\nTime Remaining: ${formatTimer(timeLeftSeconds)}. You do not have to wait for the timer to finish.`;
+
+                return `Are you sure you want to submit your exam? You cannot change your answers after submission.\n\n${statsDetail}.${warningDetail}${timeDetail}`;
+              })()
         }
-        confirmText="Yes, Submit Examination"
-        cancelText="Return to Questions"
+        confirmText={isSubmitting ? 'Submitting...' : 'Yes, Submit Examination'}
+        cancelText="Cancel"
         variant="danger"
+      />
+
+      {/* Secret Exam Code Modal (Requirements #2, #3, #4) */}
+      <SecretExamCodeModal
+        isOpen={isCodeModalOpen}
+        onClose={() => {
+          setIsCodeModalOpen(false);
+          setCodeModalExam(null);
+        }}
+        exam={codeModalExam}
+        onVerifyCode={async (examId, code) => {
+          const activeUid = currentUser?.uid || auth.currentUser?.uid || '';
+          return await examCodeService.verifyExamCode({ examId, code, studentId: activeUid });
+        }}
+        onVerified={async (exam) => {
+          setIsCodeModalOpen(false);
+          setCodeModalExam(null);
+          await launchExamSession(exam);
+        }}
       />
     </div>
   );

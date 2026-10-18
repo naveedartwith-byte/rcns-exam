@@ -1,12 +1,14 @@
 import * as admin from 'firebase-admin';
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
-import { verifyCandidateEligibility } from './examAuth';
-import { gradeExamSubmission } from './grading';
+import { verifyCandidateEligibility, validateAndAuthorizeExamCode } from './examAuth';
+import { gradeExamSubmission, calculateKmuGrade } from './grading';
 import type {
   GetStudentQuestionsRequest,
   GetStudentQuestionsResponse,
   SubmitExamAttemptRequest,
   SubmitExamAttemptResponse,
+  VerifyExamCodeRequest,
+  VerifyExamCodeResponse,
   MasterQuestion,
   SanitizedStudentQuestion,
 } from './types';
@@ -22,9 +24,62 @@ const db = admin.firestore();
 const FUNCTION_REGION = 'asia-south1';
 
 /**
+ * Cloud Function: verifyExamSecretCode
+ * Authenticates candidate, verifies eligibility, enforces rate limiting,
+ * securely validates secret exam code against salted hash, and authorizes attempt.
+ */
+export const verifyExamSecretCode = onCall(
+  { region: FUNCTION_REGION },
+  async (request): Promise<VerifyExamCodeResponse> => {
+    // 1. Verify caller authentication
+    if (!request.auth || !request.auth.uid) {
+      throw new HttpsError('unauthenticated', 'User must be authenticated to verify examination code.');
+    }
+
+    const studentUid = request.auth.uid;
+    const { examId, code } = request.data as VerifyExamCodeRequest;
+
+    if (!examId || typeof examId !== 'string') {
+      throw new HttpsError('invalid-argument', 'Valid examination ID is required.');
+    }
+
+    if (!code || typeof code !== 'string') {
+      throw new HttpsError('invalid-argument', 'Secret exam code is required.');
+    }
+
+    const result = await validateAndAuthorizeExamCode(
+      db,
+      studentUid,
+      examId,
+      code,
+      Date.now()
+    );
+
+    if (!result.success) {
+      const isRateLimited = result.code === 'rate_limited';
+      const isInvalidCode = result.code === 'invalid_code';
+      const errorCode = isRateLimited
+        ? 'resource-exhausted'
+        : isInvalidCode
+        ? 'permission-denied'
+        : 'failed-precondition';
+      throw new HttpsError(errorCode, result.message);
+    }
+
+    return {
+      success: true,
+      examId: result.examId,
+      verifiedAt: result.verifiedAt,
+      attemptId: result.attemptId,
+    };
+  }
+);
+
+/**
  * Cloud Function: getStudentExamQuestions
  * Authenticates candidate, verifies eligibility & schedule against trusted server time,
- * fetches master questions, strips answer keys & explanations, and delivers sanitized paper.
+ * checks secret code verification if required, fetches master questions, strips answer keys & explanations,
+ * and delivers sanitized paper.
  */
 export const getStudentExamQuestions = onCall(
   { region: FUNCTION_REGION },
@@ -59,6 +114,18 @@ export const getStudentExamQuestions = onCall(
     }
 
     const exam = eligibility.exam!;
+
+    // 2b. If exam requires secret code, verify candidate assignment has codeVerified === true
+    if (exam.requiresSecretCode === true) {
+      const assignmentId = `${examId}_${studentUid}`;
+      const assignmentSnap = await db.collection('assignments').doc(assignmentId).get();
+      if (!assignmentSnap.exists || assignmentSnap.data()?.codeVerified !== true) {
+        throw new HttpsError(
+          'permission-denied',
+          'Secret exam code verification required before examination questions can be accessed.'
+        );
+      }
+    }
 
     // 3. Fetch Master Questions from Firestore using privileged Admin SDK
     const questionsSnap = await db
@@ -139,7 +206,7 @@ export const submitExamAttempt = onCall(
     }
 
     const studentUid = request.auth.uid;
-    const { examId, answers } = request.data as SubmitExamAttemptRequest;
+    const { examId, answers, writtenAnswers } = request.data as SubmitExamAttemptRequest;
 
     if (!examId || typeof examId !== 'string') {
       throw new HttpsError('invalid-argument', 'Valid examination ID is required.');
@@ -166,7 +233,22 @@ export const submitExamAttempt = onCall(
         totalMarks: data.totalMarks || 0,
         percentage: data.percentage || 0,
         passed: Boolean(data.passed),
-        status: 'graded',
+        grade: data.grade || '',
+        status: data.status || 'graded',
+        mcqMarks: data.mcqMarks ?? data.marks ?? 0,
+        mcqTotalMarks: data.mcqTotalMarks ?? data.totalMarks ?? 0,
+        totalQuestions: data.totalQuestions || 0,
+        totalMCQs: data.totalMCQs || 0,
+        answeredMCQs: data.answeredMCQs || 0,
+        correctMCQs: data.correctMCQs || 0,
+        incorrectMCQs: data.incorrectMCQs || 0,
+        unansweredMCQs: data.unansweredMCQs || 0,
+        totalObjectiveMarks: data.totalObjectiveMarks || data.mcqTotalMarks || 0,
+        obtainedObjectiveMarks: data.obtainedObjectiveMarks || data.mcqMarks || 0,
+        totalWrittenQuestions: data.totalWrittenQuestions || 0,
+        writtenAnsweredCount: data.writtenAnsweredCount || 0,
+        writtenUnansweredCount: data.writtenUnansweredCount || 0,
+        requiresWrittenGrading: Boolean(data.requiresWrittenGrading),
         submittedAt: data.submittedAt ? String(data.submittedAt) : new Date().toISOString(),
       };
     }
@@ -202,10 +284,77 @@ export const submitExamAttempt = onCall(
       throw new HttpsError('failed-precondition', 'No questions found for this examination.');
     }
 
-    // 5. Server-Side Authoritative Grading
+    // Load Written Questions (if any)
+    let masterWrittenQuestions: Array<{ id: string; maxMarks: number }> = [];
+    try {
+      const writtenSnap = await db
+        .collection('writtenQuestions')
+        .where('examId', '==', examId)
+        .get();
+      masterWrittenQuestions = writtenSnap.docs.map((d) => ({
+        id: d.id,
+        maxMarks: Number(d.data().maxMarks) || 5,
+      }));
+    } catch {
+      if (Array.isArray(exam.sanitizedWrittenQuestions)) {
+        masterWrittenQuestions = exam.sanitizedWrittenQuestions.map((wq: any) => ({
+          id: String(wq.id),
+          maxMarks: Number(wq.maxMarks) || 5,
+        }));
+      }
+    }
+
+    // 5. Server-Side Authoritative Grading for MCQs
     const graded = gradeExamSubmission(masterQuestions, answers, exam.passingMarks);
 
-    // 6. Write Authoritative Result Document via Admin SDK
+    // 6. Compute Comprehensive Answer Statistics
+    const totalMCQs = masterQuestions.length;
+    const answeredMCQs = graded.answersCount;
+    const correctMCQs = graded.correctCount;
+    const incorrectMCQs = Math.max(0, answeredMCQs - correctMCQs);
+    const unansweredMCQs = Math.max(0, totalMCQs - answeredMCQs);
+    const totalObjectiveMarks = graded.totalMarks;
+    const obtainedObjectiveMarks = graded.obtainedMarks;
+
+    const totalWrittenQuestions = masterWrittenQuestions.length;
+    let writtenAnsweredCount = 0;
+    const sanitizedWrittenAnswers: Record<string, any> = {};
+
+    if (writtenAnswers && typeof writtenAnswers === 'object') {
+      for (const [key, val] of Object.entries(writtenAnswers)) {
+        if (val && typeof val === 'object') {
+          const answerText = String((val as any).answerText || '').trim();
+          sanitizedWrittenAnswers[key] = {
+            questionId: String((val as any).questionId || key),
+            type: (val as any).type || 'short',
+            questionText: String((val as any).questionText || ''),
+            answerText,
+            wordCount: Number((val as any).wordCount) || (answerText ? answerText.split(/\s+/).length : 0),
+            submittedAt: (val as any).submittedAt || new Date().toISOString(),
+          };
+          if (answerText.length > 0) {
+            writtenAnsweredCount++;
+          }
+        }
+      }
+    }
+
+    const writtenUnansweredCount = Math.max(0, totalWrittenQuestions - writtenAnsweredCount);
+    const totalQuestions = totalMCQs + totalWrittenQuestions;
+    const writtenTotalMarks = masterWrittenQuestions.reduce((sum, wq) => sum + (Number(wq.maxMarks) || 5), 0);
+    const combinedTotalMarks = Number(exam.totalMarks) || (totalObjectiveMarks + writtenTotalMarks);
+    const requiresWrittenGrading = totalWrittenQuestions > 0;
+
+    // Status & Grades
+    const status: 'pending' | 'graded' = requiresWrittenGrading ? 'pending' : 'graded';
+    const grade = requiresWrittenGrading ? 'Pending' : (graded.grade || calculateKmuGrade(graded.percentage));
+    const passed = requiresWrittenGrading ? false : graded.passed;
+    const marks = obtainedObjectiveMarks;
+    const percentage = requiresWrittenGrading
+      ? Math.round((obtainedObjectiveMarks / combinedTotalMarks) * 1000) / 10
+      : graded.percentage;
+
+    // 7. Write Authoritative Result Document via Admin SDK
     const submittedTimestamp = admin.firestore.FieldValue.serverTimestamp();
     const resultDocData = {
       id: resultId,
@@ -219,20 +368,39 @@ export const submitExamAttempt = onCall(
       program: student.program || exam.program || '',
       semester: student.semester || exam.semester || '',
       batch: student.batch || exam.batch || '',
-      marks: graded.obtainedMarks,
-      totalMarks: graded.totalMarks,
-      percentage: graded.percentage,
-      passed: graded.passed,
-      answersCount: graded.answersCount,
-      correctCount: graded.correctCount,
-      status: 'graded',
+      marks,
+      totalMarks: combinedTotalMarks,
+      percentage,
+      passed,
+      grade,
+      status,
+      answersCount: answeredMCQs,
+      correctCount: correctMCQs,
+      mcqMarks: obtainedObjectiveMarks,
+      mcqTotalMarks: totalObjectiveMarks,
+      totalQuestions,
+      totalMCQs,
+      answeredMCQs,
+      correctMCQs,
+      incorrectMCQs,
+      unansweredMCQs,
+      totalObjectiveMarks,
+      obtainedObjectiveMarks,
+      totalWrittenQuestions,
+      writtenAnsweredCount,
+      writtenUnansweredCount,
+      writtenMarks: 0,
+      writtenTotalMarks,
+      requiresWrittenGrading,
+      answers,
+      writtenAnswers: sanitizedWrittenAnswers,
       submittedAt: submittedTimestamp,
-      evaluatedBy: 'secure-backend-grading-engine',
+      evaluatedBy: requiresWrittenGrading ? 'pending-faculty-evaluation' : 'secure-backend-grading-engine',
     };
 
     await resultRef.set(resultDocData);
 
-    // 7. Update Assignment Document status to 'submitted'
+    // 8. Update Assignment Document status to 'submitted'
     try {
       const assignmentId = `${examId}_${studentUid}`;
       const assignmentRef = db.collection('assignments').doc(assignmentId);
@@ -241,8 +409,35 @@ export const submitExamAttempt = onCall(
           id: assignmentId,
           examId,
           studentId: studentUid,
+          studentName: student.name || 'Student Candidate',
+          kmuRegistrationNo: student.kmuRegistrationNo || '',
+          examTitle: exam.title,
+          examType: exam.type || 'quiz',
+          subject: exam.subject || 'Clinical Assessment',
+          program: student.program || exam.program || '',
+          semester: student.semester || exam.semester || '',
+          batch: student.batch || exam.batch || '',
           status: 'submitted',
           submittedAt: submittedTimestamp,
+          answers,
+          answersCount: answeredMCQs,
+          writtenAnswers: sanitizedWrittenAnswers,
+          writtenAnswersCount: writtenAnsweredCount,
+          mcqMarks: obtainedObjectiveMarks,
+          mcqTotalMarks: totalObjectiveMarks,
+          totalQuestions,
+          totalMCQs,
+          answeredMCQs,
+          correctMCQs,
+          incorrectMCQs,
+          unansweredMCQs,
+          totalObjectiveMarks,
+          obtainedObjectiveMarks,
+          totalWrittenQuestions,
+          writtenAnsweredCount,
+          writtenUnansweredCount,
+          totalMarks: combinedTotalMarks,
+          requiresWrittenGrading,
         },
         { merge: true }
       );
@@ -256,12 +451,28 @@ export const submitExamAttempt = onCall(
       studentId: studentUid,
       studentName: resultDocData.studentName,
       kmuRegistrationNo: resultDocData.kmuRegistrationNo,
-      marks: graded.obtainedMarks,
-      totalMarks: graded.totalMarks,
-      percentage: graded.percentage,
-      passed: graded.passed,
-      status: 'graded',
+      marks,
+      totalMarks: combinedTotalMarks,
+      percentage,
+      passed,
+      grade,
+      status,
+      mcqMarks: obtainedObjectiveMarks,
+      mcqTotalMarks: totalObjectiveMarks,
+      totalQuestions,
+      totalMCQs,
+      answeredMCQs,
+      correctMCQs,
+      incorrectMCQs,
+      unansweredMCQs,
+      totalObjectiveMarks,
+      obtainedObjectiveMarks,
+      totalWrittenQuestions,
+      writtenAnsweredCount,
+      writtenUnansweredCount,
+      requiresWrittenGrading,
       submittedAt: new Date().toISOString(),
     };
   }
 );
+

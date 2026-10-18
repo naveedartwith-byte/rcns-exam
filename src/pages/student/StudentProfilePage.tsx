@@ -102,11 +102,11 @@ export const StudentProfilePage: React.FC = () => {
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
-            <Avatar name={studentData.name} size="xl" roleBadge="student" />
+            <Avatar name={studentData.name.toUpperCase()} size="xl" roleBadge="student" />
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                <h2 style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--color-slate-900)', margin: 0 }}>
-                  {studentData.name}
+                <h2 style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--color-slate-900)', margin: 0, textTransform: 'uppercase' }}>
+                  {studentData.name.toUpperCase()}
                 </h2>
                 <Badge variant="success">Active Student</Badge>
               </div>
@@ -160,8 +160,8 @@ export const StudentProfilePage: React.FC = () => {
           >
             <div style={{ padding: '1rem', backgroundColor: 'var(--color-slate-50)', borderRadius: 'var(--radius-md)' }}>
               <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)', textTransform: 'uppercase' }}>Full Name</span>
-              <div style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--color-slate-900)', marginTop: '0.2rem' }}>
-                {studentData.name}
+              <div style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--color-slate-900)', marginTop: '0.2rem', textTransform: 'uppercase' }}>
+                {studentData.name.toUpperCase()}
               </div>
             </div>
 
@@ -235,13 +235,6 @@ export const StudentProfilePage: React.FC = () => {
                 {studentData.phone}
               </div>
             </div>
-
-            <div style={{ padding: '1rem', backgroundColor: 'var(--color-slate-50)', borderRadius: 'var(--radius-md)', gridColumn: 'span 2' }}>
-              <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)', textTransform: 'uppercase' }}>Permanent / Residential Address</span>
-              <div style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--color-slate-900)', marginTop: '0.2rem' }}>
-                {studentData.address}
-              </div>
-            </div>
           </div>
         </div>
       </Card>
@@ -290,12 +283,6 @@ export const StudentProfilePage: React.FC = () => {
             label="Contact Phone Number"
             value={studentData.phone}
             onChange={(e) => setStudentData({ ...studentData, phone: e.target.value })}
-          />
-
-          <Input
-            label="Residential Address"
-            value={studentData.address}
-            onChange={(e) => setStudentData({ ...studentData, address: e.target.value })}
           />
         </form>
       </Modal>

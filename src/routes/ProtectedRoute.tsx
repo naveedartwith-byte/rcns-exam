@@ -4,6 +4,8 @@ import { useAuth } from '../hooks/useAuth';
 import type { UserRole } from '../types/user';
 import { LoadingSpinner } from '../components/ui';
 
+import { getDefaultDashboardRoute } from '../utils/permissions';
+
 interface ProtectedRouteProps {
   children: React.ReactNode;
   allowedRoles?: UserRole[];
@@ -32,8 +34,12 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
 
   // Role validation if specific roles are required
   if (allowedRoles && allowedRoles.length > 0) {
-    if (!role || !allowedRoles.includes(role)) {
-      return <Navigate to="/unauthorized" replace />;
+    // Admin has institutional oversight over teacher exam administration
+    const isPermitted = role && (allowedRoles.includes(role) || (role === 'admin' && allowedRoles.includes('teacher')));
+    if (!isPermitted) {
+      // Seamlessly redirect to the user's appropriate authorized dashboard rather than showing 403
+      const targetRoute = getDefaultDashboardRoute(role);
+      return <Navigate to={targetRoute} replace />;
     }
   }
 

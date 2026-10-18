@@ -12,6 +12,7 @@ export interface ConfirmDialogProps {
   cancelText?: string;
   variant?: 'danger' | 'primary' | 'success';
   isLoading?: boolean;
+  zIndex?: number;
 }
 
 export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
@@ -24,6 +25,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   cancelText = 'Cancel',
   variant = 'primary',
   isLoading = false,
+  zIndex = 100050,
 }) => {
   return (
     <Modal
@@ -31,6 +33,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
       onClose={onClose}
       title={title}
       maxWidth="sm"
+      zIndex={zIndex}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={isLoading}>
@@ -46,7 +49,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
         </>
       }
     >
-      <p style={{ color: 'var(--color-slate-600)', fontSize: '0.95rem', lineHeight: 1.5, margin: 0 }}>
+      <p style={{ color: 'var(--color-slate-600)', fontSize: '0.95rem', lineHeight: 1.5, margin: 0, whiteSpace: 'pre-line' }}>
         {message}
       </p>
     </Modal>

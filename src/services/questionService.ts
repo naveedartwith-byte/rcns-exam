@@ -54,7 +54,7 @@ export const questionService = {
    * 2. If a Cloud Function is deployed (Blaze plan fallback), attempts invocation.
    * 3. Replaces generic 'Internal' failure with a safe, descriptive student diagnostic.
    */
-  async getStudentQuestions(examId: string): Promise<StudentQuestion[]> {
+  async getStudentQuestions(examId: string, studentId?: string): Promise<StudentQuestion[]> {
     if (!examId) return [];
 
     try {
@@ -64,6 +64,18 @@ export const questionService = {
 
       if (examSnap.exists()) {
         const examData = examSnap.data();
+
+        // Security Requirement #2 & #4: If exam requires secret code, check candidate assignment
+        if (examData.requiresSecretCode === true && studentId) {
+          const assignmentRef = doc(db, 'assignments', `${examId}_${studentId}`);
+          const assignSnap = await getDoc(assignmentRef);
+          if (!assignSnap.exists() || assignSnap.data()?.codeVerified !== true) {
+            throw new Error(
+              'Institutional Security Notice: Secret Exam Code verification is required before examination questions can be loaded.'
+            );
+          }
+        }
+
         if (Array.isArray(examData.sanitizedQuestions) && examData.sanitizedQuestions.length > 0) {
           // Double-check sanitization: guarantee answer keys and explanations are never delivered to student
           return examData.sanitizedQuestions.map((q: any, idx: number) => ({

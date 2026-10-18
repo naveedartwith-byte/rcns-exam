@@ -36,6 +36,19 @@ export interface Result {
   evaluatorName?: string;
   evaluatedAt?: Timestamp | string;
   regradedFrom?: number;
+  totalQuestions?: number;
+  totalMCQs?: number;
+  answeredMCQs?: number;
+  correctMCQs?: number;
+  incorrectMCQs?: number;
+  unansweredMCQs?: number;
+  totalObjectiveMarks?: number;
+  obtainedObjectiveMarks?: number;
+  totalWrittenQuestions?: number;
+  writtenAnsweredCount?: number;
+  writtenUnansweredCount?: number;
+  answers?: Record<string, any>;
+  writtenAnswers?: Record<string, any>;
   submittedAt: Timestamp | string;
   status: ResultStatus;
 }

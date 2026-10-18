@@ -99,11 +99,11 @@ export const TeacherProfilePage: React.FC = () => {
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
-            <Avatar name={teacherData.name} size="xl" roleBadge="teacher" />
+            <Avatar name={teacherData.name.toUpperCase()} size="xl" roleBadge="teacher" />
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                <h2 style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--color-slate-900)', margin: 0 }}>
-                  {teacherData.name}
+                <h2 style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--color-slate-900)', margin: 0, textTransform: 'uppercase' }}>
+                  {teacherData.name.toUpperCase()}
                 </h2>
                 <Badge variant="success">Verified Faculty</Badge>
               </div>
@@ -155,13 +155,6 @@ export const TeacherProfilePage: React.FC = () => {
               </div>
             </div>
 
-            <div style={{ padding: '1rem', backgroundColor: 'var(--color-slate-50)', borderRadius: 'var(--radius-md)' }}>
-              <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)', textTransform: 'uppercase' }}>Office / Chamber</span>
-              <div style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--color-slate-900)', marginTop: '0.2rem' }}>
-                {teacherData.office}
-              </div>
-            </div>
-
             <div style={{ padding: '1rem', backgroundColor: 'var(--color-slate-50)', borderRadius: 'var(--radius-md)', gridColumn: 'span 2' }}>
               <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)', textTransform: 'uppercase' }}>Assigned Teaching Courses (2025–2026)</span>
               <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
@@ -181,7 +174,7 @@ export const TeacherProfilePage: React.FC = () => {
         isOpen={isEditModalOpen}
         onClose={() => setIsEditModalOpen(false)}
         title="Edit Faculty Information"
-        description="Update your contact details and office chamber location."
+        description="Update your contact details and academic designation."
         maxWidth="md"
         footer={
           <>
@@ -213,12 +206,6 @@ export const TeacherProfilePage: React.FC = () => {
             label="Contact Phone Number"
             value={teacherData.phone}
             onChange={(e) => setTeacherData({ ...teacherData, phone: e.target.value })}
-          />
-
-          <Input
-            label="Office / Chamber Location"
-            value={teacherData.office}
-            onChange={(e) => setTeacherData({ ...teacherData, office: e.target.value })}
           />
         </form>
       </Modal>

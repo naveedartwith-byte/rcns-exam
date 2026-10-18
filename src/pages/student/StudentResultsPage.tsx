@@ -47,27 +47,46 @@ export const StudentResultsPage: React.FC = () => {
     };
   }, [currentUser]);
 
-  // Filtered results
-  const filteredResults = results.filter((r) => {
-    if (typeFilter !== 'all' && r.examType !== typeFilter) return false;
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      const matchSub = (r.subject || '').toLowerCase().includes(q);
-      const matchTitle = (r.examTitle || '').toLowerCase().includes(q);
-      if (!matchSub && !matchTitle) return false;
-    }
-    return true;
-  });
+  // Helper to parse dates/timestamps safely for sorting
+  const parseTime = (val: any) => {
+    if (!val) return 0;
+    if (typeof val === 'number') return val;
+    if (typeof val?.toMillis === 'function') return val.toMillis();
+    if (typeof val?.toDate === 'function') return val.toDate().getTime();
+    const d = new Date(val).getTime();
+    return isNaN(d) ? 0 : d;
+  };
 
-  const gradedResults = results.filter((r) => r.status === 'graded');
-  const pendingCount = results.filter((r) => r.status === 'pending').length;
+  // Filtered results, sorted newest submitted first (Requirement #9)
+  const filteredResults = results
+    .filter((r) => {
+      if (typeFilter !== 'all' && r.examType !== typeFilter) return false;
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const matchSub = (r.subject || '').toLowerCase().includes(q);
+        const matchTitle = (r.examTitle || '').toLowerCase().includes(q);
+        if (!matchSub && !matchTitle) return false;
+      }
+      return true;
+    })
+    .sort((a, b) => {
+      const timeA = parseTime(a.submittedAt || a.evaluatedAt || (a as any).createdAt);
+      const timeB = parseTime(b.submittedAt || b.evaluatedAt || (b as any).createdAt);
+      return timeB - timeA;
+    });
+
+  // All evaluated quizzes & exams counted in Total Exam Graded (Requirement #7)
+  const gradedResults = results.filter((r) => r.status === 'graded' || (r.percentage !== undefined && r.percentage !== null));
   const totalEvaluated = gradedResults.length;
-  const passedCount = gradedResults.filter((r) => r.passed || r.percentage >= 50).length;
-  const passRate = totalEvaluated > 0 ? Math.round((passedCount / totalEvaluated) * 100) : (pendingCount > 0 ? 0 : 100);
-  const avgPercentage =
-    totalEvaluated > 0
-      ? (gradedResults.reduce((acc, r) => acc + (r.percentage || 0), 0) / totalEvaluated).toFixed(1)
-      : '0.0';
+
+  // Accurate percentage calculated across all student quizzes (Requirement #8)
+  const totalMarksObtained = gradedResults.reduce((acc, r) => acc + (Number(r.marks) || 0), 0);
+  const totalMaxMarks = gradedResults.reduce((acc, r) => acc + (Number(r.totalMarks) || 0), 0);
+  const accuratePercentage = totalMaxMarks > 0
+    ? ((totalMarksObtained / totalMaxMarks) * 100).toFixed(1)
+    : gradedResults.length > 0
+    ? (gradedResults.reduce((acc, r) => acc + (Number(r.percentage) || 0), 0) / gradedResults.length).toFixed(1)
+    : '0.0';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.75rem' }}>
@@ -81,25 +100,12 @@ export const StudentResultsPage: React.FC = () => {
         </p>
       </div>
 
-      {/* KPI Performance Summary */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1.25rem' }}>
-        <StatCard
-          title="Cumulative GPA"
-          value="3.78"
-          subtitle="Scale: 4.0 (KMU Standard)"
-          variant="gold"
-          trend={{ value: 'Top 5% in Class', isPositive: true }}
-          icon={
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-            </svg>
-          }
-        />
-
+      {/* KPI Performance Summary: Cumulative GPA & Academic Standing removed per Requirement #6 */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '1.25rem' }}>
         <StatCard
           title="Total Exams Graded"
           value={totalEvaluated}
-          subtitle="All published evaluations"
+          subtitle="All evaluated quizzes & examinations"
           variant="primary"
           icon={
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -112,27 +118,14 @@ export const StudentResultsPage: React.FC = () => {
         />
 
         <StatCard
-          title="Overall Average"
-          value={`${avgPercentage}%`}
-          subtitle="Average score across courses"
+          title="Percentage"
+          value={`${accuratePercentage}%`}
+          subtitle="Accurate evaluated score across all quizzes"
           variant="teal"
           icon={
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <circle cx="12" cy="12" r="10" />
               <path d="m9 12 2 2 4-4" />
-            </svg>
-          }
-        />
-
-        <StatCard
-          title="Academic Standing"
-          value={`Passed (${passRate}%)`}
-          subtitle="Subjects meeting pass threshold"
-          variant="slate"
-          icon={
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
-              <polyline points="22 4 12 14.01 9 11.01" />
             </svg>
           }
         />
@@ -324,7 +317,9 @@ export const StudentResultsPage: React.FC = () => {
             >
               <div>
                 <span style={{ fontSize: '0.75rem', color: 'var(--color-slate-500)', textTransform: 'uppercase' }}>Candidate Name</span>
-                <div style={{ fontWeight: 700, color: 'var(--color-slate-900)' }}>{selectedResult.studentName}</div>
+                <div style={{ fontWeight: 700, color: 'var(--color-slate-900)', textTransform: 'uppercase' }}>
+                  {selectedResult.studentName?.toUpperCase()}
+                </div>
               </div>
               <div>
                 <span style={{ fontSize: '0.75rem', color: 'var(--color-slate-500)', textTransform: 'uppercase' }}>KMU Registration #</span>
@@ -344,25 +339,71 @@ export const StudentResultsPage: React.FC = () => {
             {selectedResult.status === 'pending' ? (
               <div
                 style={{
-                  padding: '1.5rem',
+                  padding: '1.25rem',
                   backgroundColor: '#fffbeb',
                   borderRadius: 'var(--radius-md)',
                   border: '1px solid #fde68a',
-                  textAlign: 'center',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '1rem',
                 }}
               >
-                <div style={{ fontSize: '1.1rem', fontWeight: 800, color: '#92400e', marginBottom: '0.5rem' }}>
-                  ⏳ Assessment Submission Under Faculty Evaluation
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: '1.1rem', fontWeight: 800, color: '#92400e', marginBottom: '0.25rem' }}>
+                    ⏳ Assessment Submission Under Faculty Evaluation
+                  </div>
+                  <p style={{ fontSize: '0.875rem', color: '#b45309', margin: 0, lineHeight: 1.5 }}>
+                    Your examination responses have been securely recorded. Short &amp; Long written questions require faculty evaluation before final KMU grade certification.
+                  </p>
                 </div>
-                <p style={{ fontSize: '0.875rem', color: '#b45309', margin: 0, lineHeight: 1.5 }}>
-                  Your responses for this examination have been securely archived. Official grades, percentage calculations, and KMU transcripts will be generated once verified by your course instructor.
-                </p>
+
+                {/* Objective marks & statistics breakdown if available */}
+                <div
+                  style={{
+                    backgroundColor: '#ffffff',
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid #fde68a',
+                    padding: '0.85rem 1rem',
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))',
+                    gap: '0.75rem',
+                    textAlign: 'center',
+                  }}
+                >
+                  <div>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--color-slate-500)', textTransform: 'uppercase' }}>Objective Marks</span>
+                    <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--color-slate-900)' }}>
+                      {selectedResult.mcqMarks ?? selectedResult.marks ?? 0}
+                      <span style={{ fontSize: '0.85rem', fontWeight: 500, color: 'var(--color-slate-400)' }}> / {selectedResult.mcqTotalMarks ?? '—'}</span>
+                    </div>
+                  </div>
+                  <div>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--color-slate-500)', textTransform: 'uppercase' }}>MCQs Answered</span>
+                    <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#047857' }}>
+                      {selectedResult.answeredMCQs ?? selectedResult.answersCount ?? 0}
+                      {selectedResult.totalMCQs ? <span style={{ fontSize: '0.85rem', fontWeight: 500, color: 'var(--color-slate-400)' }}> / {selectedResult.totalMCQs}</span> : ''}
+                    </div>
+                  </div>
+                  <div>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--color-slate-500)', textTransform: 'uppercase' }}>Written Answered</span>
+                    <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#2563eb' }}>
+                      {selectedResult.writtenAnsweredCount ?? 0}
+                      {selectedResult.totalWrittenQuestions ? <span style={{ fontSize: '0.85rem', fontWeight: 500, color: 'var(--color-slate-400)' }}> / {selectedResult.totalWrittenQuestions}</span> : ''}
+                    </div>
+                  </div>
+                  <div>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--color-slate-500)', textTransform: 'uppercase' }}>Written Evaluation</span>
+                    <div style={{ fontSize: '0.9rem', fontWeight: 800, color: '#d97706', marginTop: '0.25rem' }}>
+                      PENDING REVIEW
+                    </div>
+                  </div>
+                </div>
               </div>
             ) : (
               <div
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: 'repeat(3, 1fr)',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))',
                   gap: '1rem',
                   textAlign: 'center',
                 }}

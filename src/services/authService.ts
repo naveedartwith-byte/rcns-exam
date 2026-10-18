@@ -16,7 +16,7 @@ import {
 import { auth } from '../firebase/auth';
 import { db } from '../firebase/firestore';
 import type { StudentRegistrationData } from '../types/auth';
-import { normalizeKmuRegistration } from '../utils/kmuRegistration';
+import { normalizeKmuRegistration, generateKmuLookupCandidates } from '../utils/kmuRegistration';
 
 /**
  * Authentication Service Module
@@ -38,26 +38,34 @@ export const authService = {
    * Resolves the student's KMU Registration Number to their Firebase Auth account.
    */
   async loginWithKmu(kmuRegistrationNo: string, password: string): Promise<FirebaseUser> {
-    const normalizedKmu = normalizeKmuRegistration(kmuRegistrationNo);
-    if (!normalizedKmu) {
-      throw new Error('Please enter a valid KMU Registration Number (e.g., 2026/KMU-RCNS/001).');
+    const candidates = generateKmuLookupCandidates(kmuRegistrationNo);
+    if (candidates.length === 0) {
+      throw new Error('Please enter a valid KMU Registration Number (e.g., 2026/KMU/RCNS/01).');
     }
 
-    const kmuRef = doc(db, 'kmuRegistrations', normalizedKmu);
-    const kmuDoc = await getDoc(kmuRef);
+    let foundEmail: string | null = null;
+    for (const key of candidates) {
+      try {
+        const kmuSnap = await getDoc(doc(db, 'kmuRegistrations', key));
+        if (kmuSnap.exists()) {
+          const regData = kmuSnap.data() as { email?: string };
+          if (regData?.email) {
+            foundEmail = regData.email.trim();
+            break;
+          }
+        }
+      } catch (err) {
+        console.warn('Candidate lookup check:', key, err);
+      }
+    }
 
-    if (!kmuDoc.exists()) {
+    if (!foundEmail) {
       throw new Error(
         `KMU Registration Number "${kmuRegistrationNo.trim()}" is not registered in the system. Please verify your number or create an account.`
       );
     }
 
-    const regData = kmuDoc.data() as { email?: string };
-    if (!regData?.email) {
-      throw new Error('Unable to resolve account credentials for this KMU Registration Number.');
-    }
-
-    const userCredential = await signInWithEmailAndPassword(auth, regData.email.trim(), password);
+    const userCredential = await signInWithEmailAndPassword(auth, foundEmail, password);
     return userCredential.user;
   },
 

@@ -8,6 +8,7 @@ export interface ModalProps {
   children: React.ReactNode;
   footer?: React.ReactNode;
   maxWidth?: 'sm' | 'md' | 'lg' | 'xl';
+  zIndex?: number;
 }
 
 export const Modal: React.FC<ModalProps> = ({
@@ -18,6 +19,7 @@ export const Modal: React.FC<ModalProps> = ({
   children,
   footer,
   maxWidth = 'md',
+  zIndex = 100050,
 }) => {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -49,7 +51,7 @@ export const Modal: React.FC<ModalProps> = ({
       style={{
         position: 'fixed',
         inset: 0,
-        zIndex: 9999,
+        zIndex,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -73,12 +75,12 @@ export const Modal: React.FC<ModalProps> = ({
         role="dialog"
         aria-modal="true"
         aria-labelledby="modal-title"
-        className="animate-fade-in"
+        className="rcns-modal-dialog animate-fade-in"
         style={{
           position: 'relative',
           width: '100%',
           maxWidth: widthStyles[maxWidth],
-          maxHeight: '90vh',
+          maxHeight: '94vh',
           display: 'flex',
           flexDirection: 'column',
           backgroundColor: '#ffffff',
@@ -86,17 +88,19 @@ export const Modal: React.FC<ModalProps> = ({
           boxShadow: 'var(--shadow-xl)',
           border: '1px solid var(--color-slate-200)',
           overflow: 'hidden',
-          zIndex: 10000,
+          zIndex: 1,
         }}
       >
         {/* Header */}
         <div
+          className="rcns-modal-header"
           style={{
             padding: '1.25rem 1.5rem',
             borderBottom: '1px solid var(--color-slate-100)',
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'flex-start',
+            gap: '0.75rem',
           }}
         >
           <div>
@@ -122,6 +126,7 @@ export const Modal: React.FC<ModalProps> = ({
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
+              flexShrink: 0,
             }}
           >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -133,10 +138,12 @@ export const Modal: React.FC<ModalProps> = ({
 
         {/* Body */}
         <div
+          className="rcns-modal-body"
           style={{
             padding: '1.5rem',
             overflowY: 'auto',
             flex: 1,
+            WebkitOverflowScrolling: 'touch',
           }}
         >
           {children}
@@ -145,12 +152,14 @@ export const Modal: React.FC<ModalProps> = ({
         {/* Footer */}
         {footer && (
           <div
+            className="rcns-modal-footer"
             style={{
               padding: '1rem 1.5rem',
               borderTop: '1px solid var(--color-slate-100)',
               backgroundColor: 'var(--color-slate-50)',
               display: 'flex',
               justifyContent: 'flex-end',
+              flexWrap: 'wrap',
               gap: '0.75rem',
             }}
           >
@@ -158,6 +167,20 @@ export const Modal: React.FC<ModalProps> = ({
           </div>
         )}
       </div>
+
+      <style>{`
+        @media (max-width: 600px) {
+          .rcns-modal-header {
+            padding: 1rem !important;
+          }
+          .rcns-modal-body {
+            padding: 1rem !important;
+          }
+          .rcns-modal-footer {
+            padding: 0.75rem 1rem !important;
+          }
+        }
+      `}</style>
     </div>
   );
 };

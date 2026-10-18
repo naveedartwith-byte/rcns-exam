@@ -18,26 +18,12 @@ service cloud.firestore {
       return isAuthenticated() && (
         exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'Admin']) ||
-        (request.auth.token.role in ['admin', 'Admin']) ||
-        (request.auth.token.email == 'admin@royalcollege.edu.pk')
-      );
-    }
-
-    function isTeacher() {
-      return isAuthenticated() && (
-        exists(/databases/$(database)/documents/teachers/$(request.auth.uid)) ||
-        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['teacher', 'Teacher', 'faculty']) ||
-        (request.auth.token.role in ['teacher', 'Teacher', 'faculty']) ||
-        (request.auth.token.email in [
-          'dr.tariq@royalcollege.edu.pk',
-          'maryam.saeed@royalcollege.edu.pk',
-          'dr.usman@royalcollege.edu.pk',
-          'dr.sanaullah@royalcollege.edu.pk'
-        ]) ||
-        (request.auth.token.email.matches('dr\\..*@royalcollege\\.edu\\.pk') ||
-         request.auth.token.email.matches('prof\\..*@royalcollege\\.edu\\.pk'))
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'Admin', 'ADMIN']) ||
+        (request.auth.token.role in ['admin', 'Admin', 'ADMIN']) ||
+        (request.auth.token.email != null && (
+          request.auth.token.email.matches('(?i)admin@royalcollege\\.edu\\.pk') ||
+          request.auth.token.email.matches('(?i)naveedartwith@gmail\\.com')
+        ))
       );
     }
 
@@ -46,6 +32,30 @@ service cloud.firestore {
         exists(/databases/$(database)/documents/students/$(request.auth.uid)) ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'student')
+      );
+    }
+
+    function isTeacher() {
+      return isAuthenticated() && (
+        exists(/databases/$(database)/documents/teachers/$(request.auth.uid)) ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in [
+           'teacher', 'Teacher', 'TEACHER', 'faculty', 'Faculty', 'FACULTY', 'instructor', 'Instructor'
+         ]) ||
+        (request.auth.token.role in [
+          'teacher', 'Teacher', 'TEACHER', 'faculty', 'Faculty', 'FACULTY', 'instructor', 'Instructor'
+        ]) ||
+        (request.auth.token.email != null && !isStudent() && (
+          request.auth.token.email.matches('(?i).*@royalcollege\\.edu\\.pk') ||
+          request.auth.token.email in [
+            'dr.tariq@royalcollege.edu.pk',
+            'maryam.saeed@royalcollege.edu.pk',
+            'dr.usman@royalcollege.edu.pk',
+            'dr.sanaullah@royalcollege.edu.pk'
+          ] ||
+          request.auth.token.email.matches('(?i)(dr\\.tariq|maryam\\.saeed|dr\\.usman|dr\\.sanaullah).*@royalcollege\\.edu\\.pk') ||
+          request.auth.token.email.matches('(?i)(dr\\.|prof\\.|teacher|faculty).*')
+        ))
       );
     }
 
@@ -60,7 +70,13 @@ service cloud.firestore {
       // User can create their initial user doc on registration (student) or initial faculty setup; Admin can create any user doc
       allow create: if (isOwner(userId) && (
         request.resource.data.role == 'student' ||
-        (request.resource.data.role in ['teacher', 'Teacher', 'faculty'] && isTeacher())
+        (request.resource.data.role in ['teacher', 'Teacher', 'TEACHER', 'faculty', 'Faculty', 'FACULTY', 'instructor', 'Instructor'] && (
+          isTeacher() ||
+          (request.auth.token.email != null && (
+            request.auth.token.email.matches('(?i)(dr\\.|prof\\.|teacher|faculty).*') ||
+            request.auth.token.email.matches('(?i).*@royalcollege\\.edu\\.pk')
+          ))
+        ))
       )) || isAdmin();
         
       // User can update their own non-role fields; Admins can update any user doc
@@ -120,7 +136,13 @@ service cloud.firestore {
       allow read: if isOwner(teacherId) || isAdmin() || isStudent();
       
       // Authorized teachers can initialize their own profile; Admins can create or delete any teacher
-      allow create: if (isOwner(teacherId) && isTeacher()) || isAdmin();
+      allow create: if (isOwner(teacherId) && (
+        isTeacher() ||
+        (request.auth.token.email != null && (
+          request.auth.token.email.matches('(?i)(dr\\.|prof\\.|teacher|faculty).*') ||
+          request.auth.token.email.matches('(?i).*@royalcollege\\.edu\\.pk')
+        ))
+      )) || isAdmin();
       allow delete: if isAdmin();
       
       // Teacher can update own profile; Admin can update any teacher
@@ -140,13 +162,19 @@ service cloud.firestore {
     // EXAMS COLLECTION
     // =========================================================================
     match /exams/{examId} {
-      // Students can read scheduled/active exams; Teachers can read their own exams; Admins can read all
+      // Students can read scheduled/active exams; Teachers can read their own exams and institutional faculty seeded exams; Admins can read all
       allow read: if isAuthenticated() && (
         isAdmin() ||
         (isTeacher() && (
           resource.data.teacherId == request.auth.uid ||
           resource.data.teacherId == request.auth.token.email ||
-          (request.auth.token.email == 'dr.tariq@royalcollege.edu.pk' && resource.data.teacherId == 'teacher-1')
+          resource.data.teacherId in ['teacher-1', 'teacher-2', 'teacher-3', 'teacher-4'] ||
+          (request.auth.token.email != null && (
+            request.auth.token.email.matches('(?i)dr\\.tariq@royalcollege\\.edu\\.pk') ||
+            request.auth.token.email.matches('(?i)maryam\\.saeed@royalcollege\\.edu\\.pk') ||
+            request.auth.token.email.matches('(?i)dr\\.usman@royalcollege\\.edu\\.pk') ||
+            request.auth.token.email.matches('(?i)dr\\.sanaullah@royalcollege\\.edu\\.pk')
+          ))
         )) ||
         (isStudent() && (resource.data.status in ['scheduled', 'active', 'completed']))
       );
@@ -156,7 +184,8 @@ service cloud.firestore {
         isAdmin() ||
         (isTeacher() && (
           request.resource.data.teacherId == request.auth.uid ||
-          request.resource.data.teacherId == request.auth.token.email
+          request.resource.data.teacherId == request.auth.token.email ||
+          request.resource.data.teacherId in ['teacher-1', 'teacher-2', 'teacher-3', 'teacher-4']
         ))
       );
       
@@ -166,7 +195,8 @@ service cloud.firestore {
         (isTeacher() && (
           resource.data.teacherId == request.auth.uid ||
           resource.data.teacherId == request.auth.token.email ||
-          (request.auth.token.email == 'dr.tariq@royalcollege.edu.pk' && resource.data.teacherId == 'teacher-1')
+          resource.data.teacherId in ['teacher-1', 'teacher-2', 'teacher-3', 'teacher-4'] ||
+          (request.auth.token.email != null && request.auth.token.email.matches('(?i)dr\\.tariq@royalcollege\\.edu\\.pk') && resource.data.teacherId == 'teacher-1')
         ))
       );
       
@@ -174,8 +204,35 @@ service cloud.firestore {
       allow delete: if isAdmin() || (isTeacher() && (
         resource.data.teacherId == request.auth.uid ||
         resource.data.teacherId == request.auth.token.email ||
-        (request.auth.token.email == 'dr.tariq@royalcollege.edu.pk' && resource.data.teacherId == 'teacher-1')
+        resource.data.teacherId in ['teacher-1', 'teacher-2', 'teacher-3', 'teacher-4']
       ));
+    }
+
+    // =========================================================================
+    // EXAM SECRETS COLLECTION (Institutional Secret Exam Codes)
+    // =========================================================================
+    match /examSecrets/{examId} {
+      // ONLY Faculty and Admins can read or write secret exam codes.
+      // Students have ZERO read or write permission under all circumstances.
+      // Code verification is performed authoritatively on the server.
+      allow read, write: if isAuthenticated() && (isAdmin() || isTeacher());
+    }
+
+    // =========================================================================
+    // EXAM CODE RATE LIMITS COLLECTION (Brute-Force Lockouts)
+    // =========================================================================
+    match /examCodeRateLimits/{limitId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // =========================================================================
+    // EXAM CODE HASHES (Public Cryptographic Verification Tokens for Spark Tier)
+    // =========================================================================
+    match /examCodeHashes/{examId} {
+      // Contains ONLY cryptographic salt and SHA-256 hash. NEVER contains plaintext code.
+      // Authenticated students can read to verify their input without exposing code.
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && (isAdmin() || isTeacher());
     }
 
     // =========================================================================
@@ -210,7 +267,7 @@ service cloud.firestore {
       );
       
       // Teachers and Admins can assign exams to students;
-      // Backend Cloud Functions manage automated candidate enrollment via Firebase Admin SDK.
+      // Students can initialize their own assignment attempt when starting or submitting an exam.
       // Strict payload validation guarantees studentId, examId, status, and assignment authority.
       allow create: if isAuthenticated() && (
         isAdmin() ||
@@ -223,8 +280,20 @@ service cloud.firestore {
           request.resource.data.status in ['assigned', 'started'] &&
           (request.resource.data.assignedBy == request.auth.uid ||
            request.resource.data.assignedBy == request.auth.token.email ||
-           request.resource.data.assignedBy == 'teacher-1' ||
+           request.resource.data.assignedBy in ['teacher-1', 'teacher-2', 'teacher-3', 'teacher-4', 'system-cohort-sync'] ||
            isAdmin())
+        ) ||
+        (
+          isStudent() &&
+          request.resource.data.studentId == request.auth.uid &&
+          request.resource.data.examId is string &&
+          request.resource.data.examId.size() > 0 &&
+          request.resource.data.status in ['assigned', 'started', 'submitted'] &&
+          !request.resource.data.keys().hasAny([
+            'marks', 'obtainedMarks', 'mcqMarks', 'writtenMarks',
+            'shortQuestionsMarks', 'longQuestionsMarks', 'grade',
+            'percentage', 'passed', 'evaluatedBy', 'writtenEvaluations', 'gradedAt'
+          ])
         )
       );
       
@@ -238,15 +307,26 @@ service cloud.firestore {
           resource.data.studentId == request.auth.uid &&
           request.resource.data.studentId == resource.data.studentId &&
           request.resource.data.examId == resource.data.examId &&
-          resource.data.status in ['assigned', 'started'] &&
+          resource.data.status in ['assigned', 'started', 'submitted'] &&
           request.resource.data.status in ['started', 'submitted'] &&
+          !request.resource.data.keys().hasAny([
+            'marks', 'obtainedMarks', 'mcqMarks', 'writtenMarks',
+            'shortQuestionsMarks', 'longQuestionsMarks', 'grade',
+            'percentage', 'passed', 'evaluatedBy', 'writtenEvaluations', 'gradedAt'
+          ]) &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'id',
+            'examId',
+            'studentId',
+            'assignedBy',
+            'assignedAt',
             'answers',
             'answersCount',
             'writtenAnswers',
             'writtenAnswersCount',
             'status',
             'startedAt',
+            'lastActiveAt',
             'submittedAt',
             'studentName',
             'kmuRegistrationNo',
@@ -256,7 +336,15 @@ service cloud.firestore {
             'totalMarks',
             'batch',
             'semester',
-            'program'
+            'program',
+            'tabSwitchCount',
+            'timeLeftSeconds',
+            'currentQuestionIndex',
+            'activeExamSection',
+            'flaggedQuestions',
+            'codeVerified',
+            'codeVerifiedAt',
+            'attemptId'
           ])
         )
       );

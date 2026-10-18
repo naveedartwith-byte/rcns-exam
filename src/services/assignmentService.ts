@@ -69,7 +69,7 @@ export const assignmentService = {
         id: assignmentId,
         examId: assignmentData.examId,
         studentId: assignmentData.studentId,
-        assignedBy: assignmentData.assignedBy,
+        assignedBy: assignmentData.assignedBy || 'teacher-1',
         batch: assignmentData.batch || '',
         semester: assignmentData.semester || '',
         program: assignmentData.program || '',
@@ -203,7 +203,7 @@ export const assignmentService = {
           id: assignmentId,
           examId: params.examId,
           studentId: studentUid,
-          assignedBy: params.assignedBy,
+          assignedBy: params.assignedBy || 'teacher-1',
           batch: cleanBatch,
           semester: cleanSemester,
           program: cleanProgram || student.program || '',
@@ -323,17 +323,17 @@ export const assignmentService = {
       }
     }
 
-    // Step 3: Sort exams: Active first, then Upcoming (scheduled by startAt), then Completed
+    // Step 3: Sort exams: Active first, then Upcoming, then Completed; within each, NEWEST assigned/created first (Requirement #9)
     const sorted = Array.from(resultExamMap.values()).sort((a, b) => {
       const order: Record<string, number> = { active: 1, scheduled: 2, completed: 3 };
       const rankA = order[a.status] || 4;
       const rankB = order[b.status] || 4;
       if (rankA !== rankB) return rankA - rankB;
 
-      // Secondary sort: startAt ascending
-      const timeA = parseDateToMillis(a.startAt) || 0;
-      const timeB = parseDateToMillis(b.startAt) || 0;
-      return timeA - timeB;
+      // Secondary sort: Newest first (descending by assignedAt, createdAt, updatedAt, or startAt)
+      const timeA = parseDateToMillis((a as any).assignedAt || a.createdAt || a.updatedAt || a.startAt) || 0;
+      const timeB = parseDateToMillis((b as any).assignedAt || b.createdAt || b.updatedAt || b.startAt) || 0;
+      return timeB - timeA;
     });
 
     return sorted;
@@ -400,6 +400,78 @@ export const assignmentService = {
     const snapshot = await getDoc(assignmentRef);
     if (!snapshot.exists()) return null;
     return { id: snapshot.id, ...snapshot.data() } as Assignment;
+  },
+
+  /**
+   * Records candidate activity heartbeat while taking exam.
+   */
+  async recordCandidateHeartbeat(params: {
+    examId: string;
+    studentId: string;
+    studentName?: string;
+    kmuRegistrationNo?: string;
+    answersCount?: number;
+    tabSwitchCount?: number;
+    answers?: Record<string, string | number>;
+    writtenAnswers?: Record<string, any>;
+    currentQuestionIndex?: number;
+    timeLeftSeconds?: number;
+    activeExamSection?: 'mcq' | 'written';
+    flaggedQuestions?: Record<number, boolean>;
+    batch?: string;
+    semester?: string;
+    program?: string;
+    examTitle?: string;
+    examType?: string;
+    subject?: string;
+  }): Promise<void> {
+    const assignmentId = `${params.examId}_${params.studentId}`;
+    const assignRef = doc(db, 'assignments', assignmentId);
+    try {
+      const payload: Record<string, any> = {
+        id: assignmentId,
+        examId: params.examId,
+        studentId: params.studentId,
+        status: 'started',
+        lastActiveAt: serverTimestamp(),
+      };
+      if (params.studentName) payload.studentName = params.studentName;
+      if (params.kmuRegistrationNo) payload.kmuRegistrationNo = params.kmuRegistrationNo;
+      if (params.answersCount !== undefined) payload.answersCount = params.answersCount;
+      if (params.tabSwitchCount !== undefined) payload.tabSwitchCount = params.tabSwitchCount;
+      if (params.answers !== undefined) payload.answers = params.answers;
+      if (params.writtenAnswers !== undefined) payload.writtenAnswers = params.writtenAnswers;
+      if (params.currentQuestionIndex !== undefined) payload.currentQuestionIndex = params.currentQuestionIndex;
+      if (params.timeLeftSeconds !== undefined) payload.timeLeftSeconds = params.timeLeftSeconds;
+      if (params.activeExamSection !== undefined) payload.activeExamSection = params.activeExamSection;
+      if (params.flaggedQuestions !== undefined) payload.flaggedQuestions = params.flaggedQuestions;
+      if (params.batch) payload.batch = params.batch;
+      if (params.semester) payload.semester = params.semester;
+      if (params.program) payload.program = params.program;
+      if (params.examTitle) payload.examTitle = params.examTitle;
+      if (params.examType) payload.examType = params.examType;
+      if (params.subject) payload.subject = params.subject;
+
+      await setDoc(assignRef, payload, { merge: true });
+    } catch (err) {
+      console.warn('Candidate heartbeat recording note:', err);
+    }
+  },
+
+  /**
+   * Retrieves all candidate assignments for an exam to inspect active candidates.
+   */
+  async getExamCandidateRoster(examId: string): Promise<Assignment[]> {
+    if (!examId) return [];
+    const assignmentsCol = collection(db, 'assignments');
+    try {
+      const q = query(assignmentsCol, where('examId', '==', examId));
+      const snapshot = await getDocs(q);
+      return snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Assignment));
+    } catch (err) {
+      console.error('Error fetching exam candidate roster:', err);
+      return [];
+    }
   },
 };
 
