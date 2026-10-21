@@ -10,12 +10,38 @@ import {
   Alert,
   Checkbox,
   Textarea,
+  Badge,
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+  TableContainer,
 } from '../../components/ui';
 import { adminService } from '../../services/adminService';
+import {
+  cleanupService,
+  type CleanupSurveyResult,
+  TARGET_PROJECT_ID,
+  SUPER_ADMIN_EMAIL,
+} from '../../services/cleanupService';
+import { useAuth } from '../../hooks/useAuth';
 
 export const AdminSettingsPage: React.FC = () => {
+  const { userProfile } = useAuth();
   const [activeTab, setActiveTab] = useState('institution');
   const [saveNotification, setSaveNotification] = useState<string | null>(null);
+
+  // Cleanup & Production Launch State
+  const [isSurveying, setIsSurveying] = useState<boolean>(false);
+  const [surveyData, setSurveyData] = useState<CleanupSurveyResult | null>(null);
+  const [backupDownloaded, setBackupDownloaded] = useState<boolean>(false);
+  const [isExecutingCleanup, setIsExecutingCleanup] = useState<boolean>(false);
+  const [cleanupProgress, setCleanupProgress] = useState<{ current: number; total: number; collection: string } | null>(null);
+  const [cleanupSuccessSummary, setCleanupSuccessSummary] = useState<{ deletedCount: number } | null>(null);
+  const [showConfirmModal, setShowConfirmModal] = useState<boolean>(false);
+  const [confirmInput, setConfirmInput] = useState<string>('');
 
   // Institution Settings
   const [instSettings, setInstSettings] = useState({
@@ -119,6 +145,7 @@ export const AdminSettingsPage: React.FC = () => {
           { id: 'examination', label: '2. Examination Rules' },
           { id: 'grading', label: '3. Grading Scale' },
           { id: 'security', label: '4. Security & Access' },
+          { id: 'cleanup', label: '5. Production Launch & Cleanup' },
         ]}
       />
 
@@ -382,6 +409,363 @@ export const AdminSettingsPage: React.FC = () => {
             </div>
           </div>
         </Card>
+      )}
+
+      {/* 5. Production Launch & Cleanup */}
+      {activeTab === 'cleanup' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+          {/* Section Banner */}
+          <Card>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem' }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+                  <h2 style={{ fontSize: '1.35rem', fontWeight: 800, color: 'var(--color-slate-900)', margin: 0 }}>
+                    Firebase Production Launch &amp; Database Cleanup
+                  </h2>
+                  <Badge variant="warning">Production Preparation</Badge>
+                </div>
+                <p style={{ fontSize: '0.875rem', color: 'var(--color-slate-600)', marginTop: '0.4rem', lineHeight: 1.5, maxWidth: '780px' }}>
+                  Wipe all legacy testing accounts, dummy exams, questions, student assignments, and exam attempts from the active Firebase project, while <strong>strictly preserving the Super Administrator account</strong> and institutional settings.
+                </p>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.35rem' }}>
+                <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)', textTransform: 'uppercase', fontWeight: 700 }}>
+                  Active Firebase Project
+                </span>
+                <code style={{ backgroundColor: 'var(--color-slate-100)', padding: '0.25rem 0.6rem', borderRadius: 'var(--radius-sm)', fontSize: '0.85rem', fontWeight: 700, color: '#0f2744' }}>
+                  {TARGET_PROJECT_ID}
+                </code>
+              </div>
+            </div>
+
+            {/* Protected Administrator Notice Card */}
+            <div
+              style={{
+                marginTop: '1.25rem',
+                padding: '1.25rem',
+                borderRadius: 'var(--radius-lg)',
+                backgroundColor: 'rgba(13, 148, 136, 0.08)',
+                border: '1.5px solid #0d9488',
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: '1rem',
+              }}
+            >
+              <div
+                style={{
+                  width: '36px',
+                  height: '36px',
+                  borderRadius: '50%',
+                  backgroundColor: '#0d9488',
+                  color: '#ffffff',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                  fontSize: '1.1rem',
+                }}
+              >
+                🛡️
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <span style={{ fontWeight: 800, color: '#0f2744', fontSize: '0.95rem' }}>
+                    IMMUTABLE SUPER ADMINISTRATOR ACCOUNT PROTECTED
+                  </span>
+                  <Badge variant="success">Zero Deletion Guarantee</Badge>
+                </div>
+                <p style={{ fontSize: '0.85rem', color: 'var(--color-slate-700)', margin: '0.35rem 0 0 0', lineHeight: 1.5 }}>
+                  The existing Super Administrator account (<strong>{SUPER_ADMIN_EMAIL}</strong>, UID: <code>{userProfile?.uid || 'Active Session'}</code>) is permanently safeguarded. Its Authentication credentials, Firestore profile (<code>admins/{userProfile?.uid}</code>), identity record (<code>users/{userProfile?.uid}</code>), and Admin Portal access permissions will <strong>never be deleted, disabled, or reset</strong> during this cleanup.
+                </p>
+              </div>
+            </div>
+
+            {/* Step Controls */}
+            <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.5rem', flexWrap: 'wrap' }}>
+              <Button
+                variant="primary"
+                onClick={async () => {
+                  try {
+                    setIsSurveying(true);
+                    setCleanupSuccessSummary(null);
+                    const res = await cleanupService.surveyTestData();
+                    setSurveyData(res);
+                  } catch (err: any) {
+                    console.error('Survey error:', err);
+                    alert(`Survey failed: ${err.message || 'Unknown error'}`);
+                  } finally {
+                    setIsSurveying(false);
+                  }
+                }}
+                isLoading={isSurveying}
+                style={{ backgroundColor: '#0f2744' }}
+              >
+                {surveyData ? '↻ Re-Scan Database Inventory' : '🔍 Step 1: Scan Test Data Inventory'}
+              </Button>
+
+              {surveyData && (
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    const fname = cleanupService.downloadBackupFile(surveyData);
+                    setBackupDownloaded(true);
+                    setSaveNotification(`Recoverable backup downloaded: ${fname}`);
+                    setTimeout(() => setSaveNotification(null), 4000);
+                  }}
+                  style={{ borderColor: '#0d9488', color: '#0f766e' }}
+                >
+                  📥 Step 2: Download Recoverable Backup (.JSON) {backupDownloaded && '✓'}
+                </Button>
+              )}
+
+              {surveyData && surveyData.totalDocumentsToClean > 0 && (
+                <Button
+                  variant="danger"
+                  onClick={() => {
+                    setConfirmInput('');
+                    setShowConfirmModal(true);
+                  }}
+                  style={{ backgroundColor: '#dc2626', borderColor: '#dc2626' }}
+                  disabled={!backupDownloaded}
+                  title={!backupDownloaded ? 'Please download a backup before proceeding to deletion.' : ''}
+                >
+                  🗑️ Step 3: Execute Safe Cleanup ({surveyData.totalDocumentsToClean} items)
+                </Button>
+              )}
+            </div>
+
+            {!backupDownloaded && surveyData && surveyData.totalDocumentsToClean > 0 && (
+              <p style={{ fontSize: '0.8rem', color: '#b45309', marginTop: '0.5rem', marginBottom: 0 }}>
+                ⚠️ Requirement: You must click <strong>"Step 2: Download Recoverable Backup"</strong> to enable the cleanup execution button.
+              </p>
+            )}
+          </Card>
+
+          {/* Cleanup Progress Indicator */}
+          {isExecutingCleanup && cleanupProgress && (
+            <Card>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', padding: '1rem 0' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontWeight: 700, color: 'var(--color-slate-900)' }}>
+                    Deleting test data from collection: <code>{cleanupProgress.collection}</code>...
+                  </span>
+                  <span style={{ fontWeight: 700, color: 'var(--color-primary-700)' }}>
+                    {Math.round((cleanupProgress.current / Math.max(1, cleanupProgress.total)) * 100)}% ({cleanupProgress.current} / {cleanupProgress.total})
+                  </span>
+                </div>
+                <div style={{ width: '100%', height: '10px', backgroundColor: 'var(--color-slate-100)', borderRadius: 'var(--radius-full)', overflow: 'hidden' }}>
+                  <div
+                    style={{
+                      height: '100%',
+                      width: `${Math.min(100, Math.round((cleanupProgress.current / Math.max(1, cleanupProgress.total)) * 100))}%`,
+                      backgroundColor: '#dc2626',
+                      transition: 'width 0.2s ease',
+                    }}
+                  />
+                </div>
+              </div>
+            </Card>
+          )}
+
+          {/* Cleanup Success Banner */}
+          {cleanupSuccessSummary && (
+            <Alert type="success" onDismiss={() => setCleanupSuccessSummary(null)}>
+              <div>
+                <strong>Cleanup Successfully Completed!</strong>
+                <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.875rem' }}>
+                  Permanently removed {cleanupSuccessSummary.deletedCount} old test records across all test collections.
+                  The Super Administrator account (<code>{SUPER_ADMIN_EMAIL}</code>) and institutional configuration were verified intact. The examination system is now ready for production launch.
+                </p>
+              </div>
+            </Alert>
+          )}
+
+          {/* Survey Inventory Results Table */}
+          {surveyData && (
+            <Card padding="none">
+              <div style={{ padding: '1.25rem 1.5rem', borderBottom: '1px solid var(--color-slate-100)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                <div>
+                  <h3 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: 'var(--color-slate-900)' }}>
+                    Test Data Survey &amp; Proposed Deletion Scope
+                  </h3>
+                  <span style={{ fontSize: '0.8rem', color: 'var(--color-slate-500)' }}>
+                    Surveyed at: {new Date(surveyData.surveyedAt).toLocaleTimeString()} • Total Cleanable Records: <strong>{surveyData.totalDocumentsToClean}</strong>
+                  </span>
+                </div>
+                <Badge variant={surveyData.totalDocumentsToClean === 0 ? 'success' : 'warning'}>
+                  {surveyData.totalDocumentsToClean === 0 ? 'Database Clean / Production Ready' : `${surveyData.totalDocumentsToClean} Test Records Identified`}
+                </Badge>
+              </div>
+
+              <TableContainer style={{ border: 'none' }}>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Collection / Service</TableHead>
+                      <TableHead>Total Records</TableHead>
+                      <TableHead>Scheduled for Deletion</TableHead>
+                      <TableHead>Preserved Safeguard</TableHead>
+                      <TableHead>Status</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {Object.entries(surveyData.collectionBreakdown).map(([col, data]) => (
+                      <TableRow key={col}>
+                        <TableCell>
+                          <code>{col}</code>
+                        </TableCell>
+                        <TableCell>
+                          <strong>{data.total}</strong>
+                        </TableCell>
+                        <TableCell>
+                          <span style={{ color: data.toDelete > 0 ? '#dc2626' : 'var(--color-slate-500)', fontWeight: data.toDelete > 0 ? 700 : 400 }}>
+                            {data.toDelete > 0 ? `-${data.toDelete}` : '0'}
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          {col === 'users' ? (
+                            <Badge variant="success">1 (Super Admin)</Badge>
+                          ) : col === 'settings' ? (
+                            <Badge variant="outline">All Preserved</Badge>
+                          ) : (
+                            <span style={{ color: 'var(--color-slate-400)', fontSize: '0.85rem' }}>N/A (Test Only)</span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {data.toDelete > 0 ? (
+                            <Badge variant="danger">Pending Cleanup</Badge>
+                          ) : (
+                            <Badge variant="success">Clean</Badge>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                    <TableRow style={{ backgroundColor: 'var(--color-slate-50)', fontWeight: 700 }}>
+                      <TableCell>
+                        <strong>SYSTEM SETTINGS &amp; ADMINS</strong>
+                      </TableCell>
+                      <TableCell>
+                        {surveyData.preservedRecords.settingsDocsCount + 1}
+                      </TableCell>
+                      <TableCell style={{ color: '#16a34a' }}>
+                        0
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="success">100% Protected</Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="success">Preserved</Badge>
+                      </TableCell>
+                    </TableRow>
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            </Card>
+          )}
+
+          {/* Explicit Confirmation Modal */}
+          {showConfirmModal && surveyData && (
+            <div
+              style={{
+                position: 'fixed',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                backgroundColor: 'rgba(0,0,0,0.65)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 100060,
+                padding: '1rem',
+              }}
+            >
+              <div
+                style={{
+                  backgroundColor: '#ffffff',
+                  borderRadius: '1rem',
+                  maxWidth: '520px',
+                  width: '100%',
+                  padding: '2rem',
+                  boxShadow: '0 25px 50px -12px rgba(0,0,0,0.3)',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
+                  <div style={{ width: '40px', height: '40px', borderRadius: '50%', backgroundColor: '#fee2e2', color: '#dc2626', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.25rem', flexShrink: 0 }}>
+                    ⚠️
+                  </div>
+                  <div>
+                    <h3 style={{ fontSize: '1.25rem', fontWeight: 800, margin: 0, color: 'var(--color-slate-900)' }}>
+                      Confirm Permanent Test Data Cleanup
+                    </h3>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--color-slate-500)' }}>
+                      ROYAL COLLEGE OF NURSING SWAT • Production Transition
+                    </span>
+                  </div>
+                </div>
+
+                <div style={{ backgroundColor: 'var(--color-slate-50)', padding: '1rem', borderRadius: 'var(--radius-md)', fontSize: '0.85rem', color: 'var(--color-slate-700)', lineHeight: 1.5, marginBottom: '1.25rem' }}>
+                  <p style={{ margin: '0 0 0.5rem 0' }}>
+                    You are about to permanently delete <strong>{surveyData.totalDocumentsToClean} test records</strong> across students, teachers, exams, questions, assignments, and results.
+                  </p>
+                  <p style={{ margin: '0', color: '#0f766e', fontWeight: 600 }}>
+                    ✓ Super Administrator account ({SUPER_ADMIN_EMAIL}) will be preserved.
+                  </p>
+                </div>
+
+                <div style={{ marginBottom: '1.5rem' }}>
+                  <label style={{ display: 'block', fontSize: '0.825rem', fontWeight: 700, color: 'var(--color-slate-800)', marginBottom: '0.35rem' }}>
+                    Type <code style={{ color: '#dc2626' }}>CONFIRM CLEANUP</code> to authorize:
+                  </label>
+                  <Input
+                    placeholder="CONFIRM CLEANUP"
+                    value={confirmInput}
+                    onChange={(e) => setConfirmInput(e.target.value)}
+                    autoFocus
+                  />
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+                  <Button
+                    variant="outline"
+                    onClick={() => setShowConfirmModal(false)}
+                    disabled={isExecutingCleanup}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="danger"
+                    disabled={confirmInput !== 'CONFIRM CLEANUP' || isExecutingCleanup}
+                    isLoading={isExecutingCleanup}
+                    style={{ backgroundColor: '#dc2626', borderColor: '#dc2626' }}
+                    onClick={async () => {
+                      try {
+                        setIsExecutingCleanup(true);
+                        const result = await cleanupService.executeCleanup(surveyData, (prog) => {
+                          setCleanupProgress(prog);
+                        });
+                        setCleanupSuccessSummary(result);
+                        setShowConfirmModal(false);
+                        // Re-survey to refresh table
+                        const refreshed = await cleanupService.surveyTestData();
+                        setSurveyData(refreshed);
+                      } catch (execErr: any) {
+                        console.error('Execution error:', execErr);
+                        alert(`Cleanup error: ${execErr.message || 'Execution failed'}`);
+                      } finally {
+                        setIsExecutingCleanup(false);
+                        setCleanupProgress(null);
+                      }
+                    }}
+                  >
+                    Permanently Delete Test Records
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

@@ -137,43 +137,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
         return normalizedRole;
       } else {
-        // Fallback: Check if teacher profile exists directly in teachers/{uid}
-        const teacherSnap = await getDoc(doc(db, 'teachers', uid));
-        if (teacherSnap.exists()) {
-          const tData = teacherSnap.data() as TeacherProfile;
-          setTeacherProfile(tData);
-          setRole('teacher');
-          setUserProfile({
-            uid,
-            role: 'teacher',
-            name: tData.name,
-            email: tData.email,
-            createdAt: tData.createdAt,
-            updatedAt: tData.updatedAt,
-          });
-          setCurrentUser(firebaseUser);
-          return 'teacher';
-        }
-
-        // Fallback: Check if student profile exists in students/{uid}
-        const studentSnap = await getDoc(doc(db, 'students', uid));
-        if (studentSnap.exists()) {
-          const sData = studentSnap.data() as StudentProfile;
-          setStudentProfile(sData);
-          setRole('student');
-          setUserProfile({
-            uid,
-            role: 'student',
-            name: sData.name,
-            email: sData.email,
-            createdAt: sData.createdAt,
-            updatedAt: sData.updatedAt,
-          });
-          setCurrentUser(firebaseUser);
-          return 'student';
-        }
-
-        // Fallback: Check if admin profile exists in admins/{uid}
+        // Fallback 1: Check if admin profile exists in admins/{uid} (Admin precedence)
         const adminSnap = await getDoc(doc(db, 'admins', uid));
         if (adminSnap.exists()) {
           const email = (firebaseUser.email || '').trim().toLowerCase();
@@ -207,6 +171,42 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           });
           setCurrentUser(firebaseUser);
           return 'admin';
+        }
+
+        // Fallback 2: Check if teacher profile exists directly in teachers/{uid}
+        const teacherSnap = await getDoc(doc(db, 'teachers', uid));
+        if (teacherSnap.exists()) {
+          const tData = teacherSnap.data() as TeacherProfile;
+          setTeacherProfile(tData);
+          setRole('teacher');
+          setUserProfile({
+            uid,
+            role: 'teacher',
+            name: tData.name,
+            email: tData.email,
+            createdAt: tData.createdAt,
+            updatedAt: tData.updatedAt,
+          });
+          setCurrentUser(firebaseUser);
+          return 'teacher';
+        }
+
+        // Fallback 3: Check if student profile exists in students/{uid}
+        const studentSnap = await getDoc(doc(db, 'students', uid));
+        if (studentSnap.exists()) {
+          const sData = studentSnap.data() as StudentProfile;
+          setStudentProfile(sData);
+          setRole('student');
+          setUserProfile({
+            uid,
+            role: 'student',
+            name: sData.name,
+            email: sData.email,
+            createdAt: sData.createdAt,
+            updatedAt: sData.updatedAt,
+          });
+          setCurrentUser(firebaseUser);
+          return 'student';
         }
 
         // Fallback for Admin accounts: Initialize missing profile documents
@@ -501,7 +501,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const isKnownAdmin =
         normalizedEmail === 'naveedartwith@gmail.com' ||
         normalizedEmail.includes('admin');
-      return userRole || (isKnownAdmin ? 'admin' : 'teacher');
+      if (isKnownAdmin) {
+        return 'admin';
+      }
+      return userRole || 'teacher';
     } finally {
       setLoading(false);
     }

@@ -53,6 +53,8 @@ export const AdminStudentsPage: React.FC = () => {
   const [editingStudent, setEditingStudent] = useState<StudentProfile | null>(null);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [toggleStatusStudent, setToggleStatusStudent] = useState<StudentProfile | null>(null);
+  const [deleteStudent, setDeleteStudent] = useState<StudentProfile | null>(null);
+  const [isDeletingStudent, setIsDeletingStudent] = useState<boolean>(false);
   const [notification, setNotification] = useState<string | null>(null);
 
   // Form State
@@ -147,6 +149,23 @@ export const AdminStudentsPage: React.FC = () => {
     setNotification(`Status for ${toggleStatusStudent.name} changed to ${newStatus}.`);
     setToggleStatusStudent(null);
     setTimeout(() => setNotification(null), 3000);
+  };
+
+  const handleDeleteStudent = async () => {
+    if (!deleteStudent) return;
+    try {
+      setIsDeletingStudent(true);
+      await studentService.deleteStudentPermanently(deleteStudent);
+      setNotification(`Candidate record for ${deleteStudent.name} (${deleteStudent.kmuRegistrationNo}) and all associated records permanently deleted.`);
+      await fetchStudents();
+    } catch (err: any) {
+      console.error('Error permanently deleting student:', err);
+      setNotification(`Deletion failed: ${err.message || 'Unknown error'}`);
+    } finally {
+      setIsDeletingStudent(false);
+      setDeleteStudent(null);
+      setTimeout(() => setNotification(null), 4000);
+    }
   };
 
   return (
@@ -300,6 +319,15 @@ export const AdminStudentsPage: React.FC = () => {
                           onClick={() => setToggleStatusStudent(s)}
                         >
                           {s.status === 'active' ? 'Suspend' : 'Activate'}
+                        </Button>
+                        <Button
+                          variant="danger"
+                          size="sm"
+                          onClick={() => setDeleteStudent(s)}
+                          style={{ backgroundColor: '#991b1b', borderColor: '#991b1b' }}
+                          title="Permanently delete candidate and associated records"
+                        >
+                          Delete
                         </Button>
                       </div>
                     </TableCell>
@@ -474,6 +502,18 @@ export const AdminStudentsPage: React.FC = () => {
         } ${toggleStatusStudent?.name} (KMU ID: ${toggleStatusStudent?.kmuRegistrationNo})?`}
         confirmText={toggleStatusStudent?.status === 'active' ? 'Suspend Account' : 'Reactivate Account'}
         variant={toggleStatusStudent?.status === 'active' ? 'danger' : 'primary'}
+      />
+
+      {/* Permanent Deletion Confirm Dialog */}
+      <ConfirmDialog
+        isOpen={Boolean(deleteStudent)}
+        onClose={() => !isDeletingStudent && setDeleteStudent(null)}
+        onConfirm={handleDeleteStudent}
+        title="Permanently Delete Candidate"
+        message={`Are you sure you want to permanently delete candidate ${deleteStudent?.name} (${deleteStudent?.kmuRegistrationNo})?\n\nThis will permanently remove:\n• Student Profile & Registry record\n• KMU Registration unique claim\n• User authentication identity document\n• All examination assignments and attempts\n• All examination results and answer transcripts\n\nThis action cannot be undone.`}
+        confirmText={isDeletingStudent ? 'Deleting Candidate...' : 'Permanently Delete'}
+        variant="danger"
+        isLoading={isDeletingStudent}
       />
     </div>
   );

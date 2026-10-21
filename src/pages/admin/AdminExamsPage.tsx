@@ -29,7 +29,8 @@ export const AdminExamsPage: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState('all');
 
   const [selectedExam, setSelectedExam] = useState<Exam | null>(null);
-  const [deleteExamId, setDeleteExamId] = useState<string | null>(null);
+  const [deleteExam, setDeleteExam] = useState<Exam | null>(null);
+  const [isDeletingExam, setIsDeletingExam] = useState<boolean>(false);
   const [notification, setNotification] = useState<string | null>(null);
 
   const fetchExams = async () => {
@@ -62,16 +63,20 @@ export const AdminExamsPage: React.FC = () => {
   });
 
   const handleDeleteExam = async () => {
-    if (!deleteExamId) return;
+    if (!deleteExam) return;
     try {
-      await examService.deleteExam(deleteExamId);
-      setNotification('Examination record deleted from system registry.');
-      fetchExams();
-    } catch (err) {
-      console.error('Error deleting exam:', err);
+      setIsDeletingExam(true);
+      await examService.deleteExamPermanently(deleteExam.id);
+      setNotification(`Examination "${deleteExam.title}" and all associated questions, assignments, and results permanently deleted.`);
+      await fetchExams();
+    } catch (err: any) {
+      console.error('Error permanently deleting exam:', err);
+      setNotification(`Deletion failed: ${err.message || 'Unknown error'}`);
+    } finally {
+      setIsDeletingExam(false);
+      setDeleteExam(null);
+      setTimeout(() => setNotification(null), 4000);
     }
-    setDeleteExamId(null);
-    setTimeout(() => setNotification(null), 3000);
   };
 
   const handleArchiveExam = async (exam: Exam) => {
@@ -235,7 +240,9 @@ export const AdminExamsPage: React.FC = () => {
                         <Button
                           variant="danger"
                           size="sm"
-                          onClick={() => setDeleteExamId(exam.id)}
+                          onClick={() => setDeleteExam(exam)}
+                          style={{ backgroundColor: '#991b1b', borderColor: '#991b1b' }}
+                          title="Permanently delete examination and all questions/results"
                         >
                           Delete
                         </Button>
@@ -303,13 +310,14 @@ export const AdminExamsPage: React.FC = () => {
 
       {/* Delete Exam Confirmation Dialog */}
       <ConfirmDialog
-        isOpen={Boolean(deleteExamId)}
-        onClose={() => setDeleteExamId(null)}
+        isOpen={Boolean(deleteExam)}
+        onClose={() => !isDeletingExam && setDeleteExam(null)}
         onConfirm={handleDeleteExam}
-        title="Permanently Delete Examination Record"
-        message="This action will delete the examination paper and its question configurations from the college registry."
-        confirmText="Confirm Delete"
+        title="Permanently Delete Examination Paper"
+        message={`Are you sure you want to permanently delete examination "${deleteExam?.title}" (${deleteExam?.subject})?\n\nThis will permanently delete:\n• The examination master record\n• All associated objective MCQs and answer keys\n• All associated short and long written questions & rubrics\n• All candidate exam assignments\n• All submitted attempts and examination results\n• Institutional secret exam codes and security verification tokens\n\nThis action cannot be undone.`}
+        confirmText={isDeletingExam ? 'Deleting Exam...' : 'Permanently Delete'}
         variant="danger"
+        isLoading={isDeletingExam}
       />
     </div>
   );

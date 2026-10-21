@@ -3,12 +3,12 @@ import {
   getDoc,
   setDoc,
   updateDoc,
-  deleteDoc,
   collection,
   query,
   where,
   getDocs,
   serverTimestamp,
+  writeBatch,
 } from 'firebase/firestore';
 import { db } from '../firebase/firestore';
 import type { Exam } from '../types/exam';
@@ -124,11 +124,54 @@ export const examService = {
   },
 
   /**
-   * Deletes an exam document.
+   * Permanently deletes an exam and cascades across all associated collections:
+   * 1. Master questions in questions collection where examId == examId
+   * 2. Written questions in writtenQuestions collection where examId == examId
+   * 3. Candidate assignments where examId == examId
+   * 4. Candidate results where examId == examId
+   * 5. Secret exam codes in examSecrets/{examId}
+   * 6. Secret code hashes in examCodeHashes/{examId}
+   * 7. Parent exam document in exams/{examId}
+   */
+  async deleteExamPermanently(examId: string): Promise<void> {
+    if (!examId) return;
+
+    // Fetch related documents across all collections in parallel
+    const [qSnap, wqSnap, assignSnap, resSnap] = await Promise.all([
+      getDocs(query(collection(db, 'questions'), where('examId', '==', examId))),
+      getDocs(query(collection(db, 'writtenQuestions'), where('examId', '==', examId))),
+      getDocs(query(collection(db, 'assignments'), where('examId', '==', examId))),
+      getDocs(query(collection(db, 'results'), where('examId', '==', examId))),
+    ]);
+
+    const examRef = doc(db, 'exams', examId);
+    const secretRef = doc(db, 'examSecrets', examId);
+    const hashRef = doc(db, 'examCodeHashes', examId);
+
+    const allRefs = [
+      ...qSnap.docs.map((d) => d.ref),
+      ...wqSnap.docs.map((d) => d.ref),
+      ...assignSnap.docs.map((d) => d.ref),
+      ...resSnap.docs.map((d) => d.ref),
+      secretRef,
+      hashRef,
+      examRef,
+    ];
+
+    const BATCH_LIMIT = 250;
+    for (let i = 0; i < allRefs.length; i += BATCH_LIMIT) {
+      const batch = writeBatch(db);
+      const chunk = allRefs.slice(i, i + BATCH_LIMIT);
+      chunk.forEach((ref) => batch.delete(ref));
+      await batch.commit();
+    }
+  },
+
+  /**
+   * Deletes an exam document (cascades permanently to avoid orphaned questions/records).
    */
   async deleteExam(examId: string): Promise<void> {
-    const examRef = doc(db, 'exams', examId);
-    await deleteDoc(examRef);
+    await this.deleteExamPermanently(examId);
   },
 };
 

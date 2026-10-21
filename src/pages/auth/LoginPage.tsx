@@ -70,7 +70,7 @@ export const LoginPage: React.FC = () => {
         const defaultRoute = getDefaultDashboardRoute(userRole);
         const targetRoute = (from && !from.includes('unauthorized') && !from.includes('login') && (
           (userRole === 'teacher' && from.startsWith('/teacher')) ||
-          (userRole === 'admin' && (from.startsWith('/admin') || from.startsWith('/teacher')))
+          (userRole === 'admin' && from.startsWith('/admin'))
         )) ? from : defaultRoute;
         navigate(targetRoute, { replace: true });
       }

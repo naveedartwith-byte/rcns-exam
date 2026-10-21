@@ -55,6 +55,8 @@ export const AdminTeachersPage: React.FC = () => {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [permissionsTeacher, setPermissionsTeacher] = useState<TeacherProfile | null>(null);
   const [toggleStatusTeacher, setToggleStatusTeacher] = useState<TeacherProfile | null>(null);
+  const [deleteTeacher, setDeleteTeacher] = useState<TeacherProfile | null>(null);
+  const [isDeletingTeacher, setIsDeletingTeacher] = useState<boolean>(false);
   const [notification, setNotification] = useState<string | null>(null);
 
   // Form State
@@ -156,6 +158,34 @@ export const AdminTeachersPage: React.FC = () => {
     setNotification(`Faculty status for ${toggleStatusTeacher.name} set to ${newStatus}.`);
     setToggleStatusTeacher(null);
     setTimeout(() => setNotification(null), 3000);
+  };
+
+  const handleDeleteTeacher = async () => {
+    if (!deleteTeacher) return;
+    const emailLower = (deleteTeacher.email || '').trim().toLowerCase();
+    if (
+      emailLower === 'naveedartwith@gmail.com' ||
+      emailLower === 'admin@royalcollege.edu.pk' ||
+      emailLower.startsWith('admin@')
+    ) {
+      setNotification('Security Notice: Institutional Super Administrator cannot be deleted.');
+      setDeleteTeacher(null);
+      setTimeout(() => setNotification(null), 4000);
+      return;
+    }
+    try {
+      setIsDeletingTeacher(true);
+      await teacherService.deleteTeacherPermanently(deleteTeacher.uid, deleteTeacher.email);
+      setNotification(`Faculty profile for ${deleteTeacher.name} permanently removed.`);
+      await fetchTeachers();
+    } catch (err: any) {
+      console.error('Error deleting teacher:', err);
+      setNotification(`Deletion failed: ${err.message || 'Unknown error'}`);
+    } finally {
+      setIsDeletingTeacher(false);
+      setDeleteTeacher(null);
+      setTimeout(() => setNotification(null), 4000);
+    }
   };
 
   return (
@@ -301,6 +331,15 @@ export const AdminTeachersPage: React.FC = () => {
                           onClick={() => setToggleStatusTeacher(t)}
                         >
                           {t.status === 'active' ? 'Deactivate' : 'Activate'}
+                        </Button>
+                        <Button
+                          variant="danger"
+                          size="sm"
+                          onClick={() => setDeleteTeacher(t)}
+                          style={{ backgroundColor: '#991b1b', borderColor: '#991b1b' }}
+                          title="Permanently delete faculty record"
+                        >
+                          Delete
                         </Button>
                       </div>
                     </TableCell>
@@ -514,6 +553,18 @@ export const AdminTeachersPage: React.FC = () => {
         } faculty access for ${toggleStatusTeacher?.name}?`}
         confirmText={toggleStatusTeacher?.status === 'active' ? 'Deactivate' : 'Reactivate'}
         variant={toggleStatusTeacher?.status === 'active' ? 'danger' : 'primary'}
+      />
+
+      {/* Permanent Deletion Confirm Dialog */}
+      <ConfirmDialog
+        isOpen={Boolean(deleteTeacher)}
+        onClose={() => !isDeletingTeacher && setDeleteTeacher(null)}
+        onConfirm={handleDeleteTeacher}
+        title="Permanently Delete Faculty Member"
+        message={`Are you sure you want to permanently delete faculty member ${deleteTeacher?.name} (${deleteTeacher?.email})?\n\nThis will permanently remove:\n• Faculty profile from directory\n• User authentication identity document\n\nThis action cannot be undone.`}
+        confirmText={isDeletingTeacher ? 'Deleting Faculty...' : 'Permanently Delete'}
+        variant="danger"
+        isLoading={isDeletingTeacher}
       />
     </div>
   );

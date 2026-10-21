@@ -1,0 +1,77 @@
+{
+  "metadata": {
+    "projectId": "royal-college-exam-system",
+    "createdAt": "2026-10-21T18:23:25.508Z",
+    "generator": "RCNS Firebase Cleanup & Recovery Tool v1.0",
+    "protectedAdminEmails": [
+      "naveedartwith@gmail.com",
+      "admin@royalcollege.edu.pk"
+    ],
+    "superAdminUid": "admin-auth-uid-naveed",
+    "totalRecordsBackedUp": 12
+  },
+  "authUsers": [
+    {
+      "uid": "admin-auth-uid-naveed",
+      "email": "naveedartwith@gmail.com"
+    },
+    {
+      "uid": "test-student-1",
+      "email": "test.student@example.com"
+    }
+  ],
+  "firestoreCollections": {
+    "students": {
+      "total": 1,
+      "toDelete": 1,
+      "toPreserve": 0,
+      "docs": [
+        {
+          "id": "test-student-1"
+        }
+      ]
+    },
+    "exams": {
+      "total": 2,
+      "toDelete": 2,
+      "toPreserve": 0,
+      "docs": [
+        {
+          "id": "exam-1"
+        },
+        {
+          "id": "exam-2"
+        }
+      ]
+    },
+    "users": {
+      "total": 2,
+      "toDelete": 1,
+      "toPreserve": 1,
+      "docs": [
+        {
+          "id": "admin-auth-uid-naveed"
+        },
+        {
+          "id": "test-student-1"
+        }
+      ]
+    },
+    "settings": {
+      "total": 3,
+      "toDelete": 0,
+      "toPreserve": 3,
+      "docs": [
+        {
+          "id": "institution"
+        },
+        {
+          "id": "examination"
+        },
+        {
+          "id": "grading"
+        }
+      ]
+    }
+  }
+}
