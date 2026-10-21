@@ -8,6 +8,7 @@ import {
   Button,
   Card,
   ConfirmDialog,
+  Modal,
   EmptyState,
   Alert,
   LoadingSpinner,
@@ -53,6 +54,7 @@ export const StudentExamsPage: React.FC = () => {
   const [flaggedQuestions, setFlaggedQuestions] = useState<Record<number, boolean>>({});
   const [timeLeftSeconds, setTimeLeftSeconds] = useState(3600);
   const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
+  const [showIncompleteAlert, setShowIncompleteAlert] = useState(false);
   const [examSubmitted, setExamSubmitted] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [mobilePaletteOpen, setMobilePaletteOpen] = useState(false);
@@ -66,9 +68,12 @@ export const StudentExamsPage: React.FC = () => {
     total: number;
     percentage: number;
     passed: boolean;
+    grade?: string;
     status?: string;
     answersCount?: number;
     totalQuestions?: number;
+    correctCount?: number;
+    incorrectCount?: number;
   } | null>(null);
   const [isLoadingQuestions, setIsLoadingQuestions] = useState(false);
   const [examQuestionsError, setExamQuestionsError] = useState<string | null>(null);
@@ -365,7 +370,7 @@ export const StudentExamsPage: React.FC = () => {
             // Trigger automatic submission outside state updater callback
             setTimeout(() => {
               if (!hasSubmittedRef.current && !isSubmittingRef.current) {
-                handleFinalSubmit();
+                handleFinalSubmit(true);
               }
             }, 0);
             return 0;
@@ -727,18 +732,56 @@ export const StudentExamsPage: React.FC = () => {
     writtenAnswersRef.current = writtenAnswers;
   }, [writtenAnswers]);
 
-  const handleFinalSubmit = async () => {
+  const handleFinalSubmit = async (forceOnTimeout = false) => {
     const activeUser = currentUser || auth.currentUser;
     console.log('[handleFinalSubmit] Submission triggered:', {
       hasExam: Boolean(takingExam),
       activeUser: activeUser?.uid,
       isSubmitting: isSubmittingRef.current,
       hasSubmitted: hasSubmittedRef.current,
+      forceOnTimeout,
     });
 
     if (isSubmittingRef.current || hasSubmittedRef.current || !takingExam || !activeUser) {
       console.warn('[handleFinalSubmit] Submission cancelled due to state guard');
       return;
+    }
+
+    // Strict Requirement: Manual exam submission is blocked until ALL MCQs are completed
+    if (!forceOnTimeout && examQuestions.length > 0) {
+      let finalCheckAnswers: Record<string | number, number> = {
+        ...selectedAnswersRef.current,
+        ...selectedAnswers,
+      };
+      try {
+        const key = `rcns_exam_progress_${activeUser.uid}_${takingExam.id}`;
+        const stored = localStorage.getItem(key);
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (parsed.selectedAnswers && typeof parsed.selectedAnswers === 'object') {
+            finalCheckAnswers = { ...parsed.selectedAnswers, ...finalCheckAnswers };
+          }
+        }
+      } catch {}
+
+      const checkAnsweredCount = examQuestions.filter((q, idx) => {
+        const v1 = finalCheckAnswers[idx];
+        const v2 = q.id ? finalCheckAnswers[q.id] : undefined;
+        return (
+          (v1 !== undefined && v1 !== null && v1 !== -1 && String(v1) !== '-1') ||
+          (v2 !== undefined && v2 !== null && v2 !== -1 && String(v2) !== '-1')
+        );
+      }).length;
+
+      if (checkAnsweredCount < examQuestions.length) {
+        console.warn('[handleFinalSubmit] Blocked submission: not all MCQs are answered', {
+          answered: checkAnsweredCount,
+          total: examQuestions.length,
+        });
+        setShowSubmitConfirm(false);
+        setShowIncompleteAlert(true);
+        return;
+      }
     }
 
     // Immediately acquire submission lock and show loading state
@@ -774,21 +817,41 @@ export const StudentExamsPage: React.FC = () => {
         // best-effort
       }
 
-      // Normalize MCQ answers so there is strictly ONE key per question (prevents double-counting)
+      // Normalize MCQ answers: map each answered question under all candidate keys for robust grading
       const normalizedMcqAnswers: Record<string, any> = {};
+      let totalAttemptedMcqs = 0;
       examQuestions.forEach((q, idx) => {
         const valIdx = finalSelected[idx];
         const valId = q.id ? finalSelected[q.id] : undefined;
+        const chosenVal =
+          valIdx !== undefined && valIdx !== -1 && String(valIdx) !== '-1'
+            ? valIdx
+            : valId !== undefined && valId !== -1 && String(valId) !== '-1'
+            ? valId
+            : undefined;
 
-        if (valIdx !== undefined && valIdx !== -1 && String(valIdx) !== '-1') {
-          normalizedMcqAnswers[q.id || idx] = valIdx;
-        } else if (valId !== undefined && valId !== -1 && String(valId) !== '-1') {
-          normalizedMcqAnswers[q.id] = valId;
+        if (chosenVal !== undefined) {
+          totalAttemptedMcqs++;
+          normalizedMcqAnswers[idx] = chosenVal;
+          normalizedMcqAnswers[String(idx)] = chosenVal;
+          normalizedMcqAnswers[idx + 1] = chosenVal;
+          normalizedMcqAnswers[String(idx + 1)] = chosenVal;
+          normalizedMcqAnswers[`q-${idx + 1}`] = chosenVal;
+          normalizedMcqAnswers[`q${idx + 1}`] = chosenVal;
+          if (q.id) {
+            normalizedMcqAnswers[q.id] = chosenVal;
+          }
+          if (q.order !== undefined) {
+            normalizedMcqAnswers[q.order] = chosenVal;
+            normalizedMcqAnswers[String(q.order)] = chosenVal;
+            normalizedMcqAnswers[`q-${q.order}`] = chosenVal;
+            normalizedMcqAnswers[`q${q.order}`] = chosenVal;
+          }
         }
       });
 
       // Calculate accurate answered questions count (exactly the number of attempted questions)
-      const answeredCount = Object.keys(normalizedMcqAnswers).length;
+      const answeredCount = totalAttemptedMcqs;
 
       const writtenAnsweredCount = Object.values(finalWritten).filter(
         (a) => a && a.answerText && a.answerText.trim().length > 0
@@ -828,9 +891,12 @@ export const StudentExamsPage: React.FC = () => {
         total: result.totalMarks,
         percentage: result.percentage,
         passed: result.passed ?? result.percentage >= 50,
-        status: hasWritten ? 'pending' : (result.status || 'pending'),
+        grade: result.grade || '',
+        status: hasWritten ? 'pending' : (result.status || 'graded'),
         answersCount: (result.answeredMCQs ?? answeredCount) + writtenAnsweredCount,
         totalQuestions: examQuestions.length + writtenQuestions.length,
+        correctCount: result.correctCount ?? result.correctMCQs,
+        incorrectCount: result.incorrectMCQs,
       });
 
       // Update local exam status to completed
@@ -865,9 +931,33 @@ export const StudentExamsPage: React.FC = () => {
   const currentExamQuestions = examQuestions;
   const currentQuestion = currentExamQuestions[currentQuestionIndex];
   const totalQuestions = currentExamQuestions.length;
+
+  // Helper: check if a specific question is answered
+  const isQuestionAnswered = (idx: number, qId?: string) => {
+    const byIdx = selectedAnswers[idx];
+    const byId = qId ? selectedAnswers[qId] : undefined;
+    return (
+      (byIdx !== undefined && byIdx !== null && byIdx !== -1 && String(byIdx) !== '-1') ||
+      (byId !== undefined && byId !== null && byId !== -1 && String(byId) !== '-1')
+    );
+  };
+
   const answeredCount = currentExamQuestions.filter(
-    (q, idx) => selectedAnswers[idx] !== undefined || (q.id && selectedAnswers[q.id] !== undefined)
+    (q, idx) => isQuestionAnswered(idx, q.id)
   ).length;
+
+  const unansweredCount = Math.max(0, totalQuestions - answeredCount);
+  const allMcqsCompleted = totalQuestions === 0 || answeredCount >= totalQuestions;
+  const firstUnansweredIndex = currentExamQuestions.findIndex((q, idx) => !isQuestionAnswered(idx, q.id));
+
+  // Handler to open confirm dialog or block with incomplete alert
+  const handleAttemptSubmit = () => {
+    if (examQuestions.length > 0 && !allMcqsCompleted) {
+      setShowIncompleteAlert(true);
+      return;
+    }
+    setShowSubmitConfirm(true);
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
@@ -1200,13 +1290,10 @@ export const StudentExamsPage: React.FC = () => {
                 <span>{formatTimer(timeLeftSeconds)}</span>
               </div>
 
-              {/* FINISH & SUBMIT BUTTON IN HEADER: ALWAYS VISIBLE ON ALL SCREENS & SECTIONS (Requirement #2) */}
+              {/* FINISH & SUBMIT BUTTON IN HEADER: ALWAYS VISIBLE ON ALL SCREENS & SECTIONS */}
               <button
                 type="button"
-                onClick={() => {
-                  console.log('[StudentExamsPage] Header Submit Exam button clicked');
-                  setShowSubmitConfirm(true);
-                }}
+                onClick={handleAttemptSubmit}
                 disabled={isSubmitting}
                 style={{
                   backgroundColor: '#dc2626',
@@ -1224,8 +1311,17 @@ export const StudentExamsPage: React.FC = () => {
                   transition: 'background-color 0.15s ease',
                   flexShrink: 0,
                 }}
+                title={
+                  allMcqsCompleted
+                    ? 'Submit your completed exam paper'
+                    : `All questions must be answered before submission (${answeredCount}/${totalQuestions} completed)`
+                }
               >
-                {isSubmitting ? 'Submitting...' : '✓ Submit Exam'}
+                {isSubmitting
+                  ? 'Submitting...'
+                  : allMcqsCompleted
+                  ? '✓ Submit Exam'
+                  : `✓ Submit (${answeredCount}/${totalQuestions})`}
               </button>
 
               {/* Mobile Palette Toggle Button */}
@@ -1333,7 +1429,7 @@ export const StudentExamsPage: React.FC = () => {
               <Button
                 variant="danger"
                 size="sm"
-                onClick={handleFinalSubmit}
+                onClick={() => handleFinalSubmit(false)}
                 disabled={isSubmitting}
               >
                 {isSubmitting ? 'Retrying...' : 'Retry Submit'}
@@ -1396,42 +1492,100 @@ export const StudentExamsPage: React.FC = () => {
                   </div>
 
                   <h2 style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--color-slate-900)' }}>
-                    Examination Submitted Successfully!
+                    Examination Completed &amp; Evaluated!
                   </h2>
                   <p style={{ fontSize: '0.9rem', color: 'var(--color-slate-600)', marginTop: '0.35rem' }}>
-                    Your responses have been recorded and timestamped in the ROYAL COLLEGE OF NURSING SWAT academic repository.
+                    Aapka result direct calculate ho chuka hai. Royal College of Nursing Swat academic repository par record mehfooz hai.
                   </p>
 
+                  {/* Primary Score & Performance KPI Card */}
                   <div
                     style={{
-                      margin: '1.5rem 0',
+                      margin: '1.5rem 0 1rem',
                       padding: '1.25rem',
                       backgroundColor: 'var(--color-slate-50)',
-                      borderRadius: 'var(--radius-md)',
+                      borderRadius: 'var(--radius-lg)',
                       border: '1px solid var(--color-slate-200)',
                       display: 'grid',
-                      gridTemplateColumns: 'repeat(auto-fit, minmax(100px, 1fr))',
-                      gap: '0.75rem',
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))',
+                      gap: '0.85rem',
+                      textAlign: 'center',
                     }}
                   >
                     <div>
-                      <span style={{ fontSize: '0.75rem', color: 'var(--color-slate-500)' }}>Questions</span>
-                      <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--color-slate-900)' }}>
-                        {examScoreSummary.totalQuestions ?? totalQuestions}
+                      <span style={{ fontSize: '0.75rem', color: 'var(--color-slate-500)', fontWeight: 600 }}>Marks Obtained</span>
+                      <div style={{ fontSize: '1.35rem', fontWeight: 900, color: '#0f2744', marginTop: '0.15rem' }}>
+                        {examScoreSummary.score} / {examScoreSummary.total}
                       </div>
                     </div>
                     <div>
-                      <span style={{ fontSize: '0.75rem', color: 'var(--color-slate-500)' }}>Answered</span>
-                      <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#047857' }}>
-                        {examScoreSummary.answersCount ?? answeredCount}
+                      <span style={{ fontSize: '0.75rem', color: 'var(--color-slate-500)', fontWeight: 600 }}>Percentage</span>
+                      <div style={{ fontSize: '1.35rem', fontWeight: 900, color: examScoreSummary.passed ? '#059669' : '#dc2626', marginTop: '0.15rem' }}>
+                        {examScoreSummary.percentage}%
                       </div>
                     </div>
                     <div>
-                      <span style={{ fontSize: '0.75rem', color: 'var(--color-slate-500)' }}>Status</span>
-                      <div style={{ fontSize: '0.9rem', fontWeight: 800, color: '#059669', marginTop: '0.2rem' }}>
-                        SUBMITTED
+                      <span style={{ fontSize: '0.75rem', color: 'var(--color-slate-500)', fontWeight: 600 }}>Letter Grade</span>
+                      <div style={{ fontSize: '1.35rem', fontWeight: 900, color: '#0f2744', marginTop: '0.15rem' }}>
+                        {examScoreSummary.grade || (examScoreSummary.percentage >= 80 ? 'A+' : examScoreSummary.percentage >= 70 ? 'A' : examScoreSummary.percentage >= 60 ? 'B' : examScoreSummary.percentage >= 50 ? 'C' : 'F')}
                       </div>
                     </div>
+                    <div>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--color-slate-500)', fontWeight: 600 }}>Result Status</span>
+                      <div style={{ marginTop: '0.25rem' }}>
+                        <span
+                          style={{
+                            display: 'inline-block',
+                            padding: '0.3rem 0.85rem',
+                            borderRadius: '999px',
+                            fontSize: '0.8rem',
+                            fontWeight: 800,
+                            letterSpacing: '0.05em',
+                            backgroundColor: examScoreSummary.passed ? '#ecfdf5' : '#fef2f2',
+                            color: examScoreSummary.passed ? '#059669' : '#dc2626',
+                            border: `1px solid ${examScoreSummary.passed ? '#a7f3d0' : '#fecaca'}`,
+                          }}
+                        >
+                          {examScoreSummary.passed ? 'PASSED' : 'FAILED'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Secondary Metrics Breakdown */}
+                  <div
+                    style={{
+                      marginBottom: '1.5rem',
+                      padding: '0.75rem 1rem',
+                      backgroundColor: '#ffffff',
+                      borderRadius: 'var(--radius-md)',
+                      border: '1px solid var(--color-slate-200)',
+                      display: 'flex',
+                      justifyContent: 'space-around',
+                      fontSize: '0.825rem',
+                      color: 'var(--color-slate-600)',
+                    }}
+                  >
+                    <div>
+                      <span>Total Questions: </span>
+                      <strong style={{ color: '#0f2744' }}>{examScoreSummary.totalQuestions ?? totalQuestions}</strong>
+                    </div>
+                    <div>
+                      <span>Answered: </span>
+                      <strong style={{ color: '#047857' }}>{examScoreSummary.answersCount ?? answeredCount}</strong>
+                    </div>
+                    {examScoreSummary.correctCount !== undefined && (
+                      <div>
+                        <span>Correct: </span>
+                        <strong style={{ color: '#059669' }}>{examScoreSummary.correctCount}</strong>
+                      </div>
+                    )}
+                    {examScoreSummary.incorrectCount !== undefined && (
+                      <div>
+                        <span>Incorrect: </span>
+                        <strong style={{ color: '#dc2626' }}>{examScoreSummary.incorrectCount}</strong>
+                      </div>
+                    )}
                   </div>
 
                   <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', justifyContent: 'center' }}>
@@ -1597,7 +1751,7 @@ export const StudentExamsPage: React.FC = () => {
                           size="md"
                           onClick={() => {
                             console.log('[StudentExamsPage] Written section bottom Submit Exam button clicked');
-                            setShowSubmitConfirm(true);
+                            handleAttemptSubmit();
                           }}
                           disabled={isSubmitting}
                           style={{ fontWeight: 700 }}
@@ -1736,12 +1890,16 @@ export const StudentExamsPage: React.FC = () => {
                           <Button
                             variant="danger"
                             size="sm"
-                            onClick={() => setShowSubmitConfirm(true)}
+                            onClick={handleAttemptSubmit}
                             disabled={isSubmitting}
                             style={{ fontWeight: 700 }}
-                            title="Submit your exam paper at any time"
+                            title={
+                              allMcqsCompleted
+                                ? 'Submit your completed exam paper'
+                                : `All questions must be answered before submission (${answeredCount}/${totalQuestions} completed)`
+                            }
                           >
-                            ✓ Submit Exam
+                            {allMcqsCompleted ? '✓ Submit Exam' : `✓ Submit Exam (${answeredCount}/${totalQuestions})`}
                           </Button>
                         </div>
 
@@ -1881,12 +2039,16 @@ export const StudentExamsPage: React.FC = () => {
                       size="sm"
                       onClick={() => {
                         console.log('[StudentExamsPage] MCQ palette Submit Exam button clicked');
-                        setShowSubmitConfirm(true);
+                        handleAttemptSubmit();
                       }}
                       disabled={isSubmitting}
                       style={{ fontWeight: 700 }}
                     >
-                      {isSubmitting ? 'Submitting...' : 'Finish & Submit Entire Exam'}
+                      {isSubmitting
+                        ? 'Submitting...'
+                        : allMcqsCompleted
+                        ? 'Finish & Submit Entire Exam'
+                        : `Finish & Submit (${answeredCount}/${totalQuestions})`}
                     </Button>
                   </div>
                 </div>
@@ -2090,7 +2252,86 @@ export const StudentExamsPage: React.FC = () => {
         </div>
       )}
 
-      {/* Submit Confirmation Dialog (Allows submission anytime with time remaining) */}
+      {/* Incomplete MCQs Prevention Alert Modal (Requirement #1) */}
+      <Modal
+        isOpen={showIncompleteAlert}
+        onClose={() => setShowIncompleteAlert(false)}
+        title="⚠️ Incomplete Examination Notice"
+        maxWidth="md"
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '0.25rem 0' }}>
+          <div
+            style={{
+              backgroundColor: '#fffbeb',
+              border: '1px solid #fef3c7',
+              borderRadius: 'var(--radius-md)',
+              padding: '1rem',
+              color: '#92400e',
+              fontSize: '0.9rem',
+              lineHeight: 1.5,
+            }}
+          >
+            <strong>All Multiple Choice Questions (MCQs) Must Be Answered</strong>
+            <p style={{ margin: '0.4rem 0 0', fontSize: '0.85rem', color: '#b45309' }}>
+              Under Royal College of Nursing Swat examination regulations, you cannot submit this examination paper until all questions have been attempted.
+            </p>
+          </div>
+
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(3, 1fr)',
+              gap: '0.75rem',
+              textAlign: 'center',
+              backgroundColor: '#f8fafc',
+              padding: '0.85rem',
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid #e2e8f0',
+            }}
+          >
+            <div>
+              <span style={{ fontSize: '0.72rem', color: '#64748b', fontWeight: 600 }}>Total MCQs</span>
+              <div style={{ fontSize: '1.2rem', fontWeight: 800, color: '#0f2744' }}>{totalQuestions}</div>
+            </div>
+            <div>
+              <span style={{ fontSize: '0.72rem', color: '#64748b', fontWeight: 600 }}>Answered</span>
+              <div style={{ fontSize: '1.2rem', fontWeight: 800, color: '#059669' }}>{answeredCount}</div>
+            </div>
+            <div>
+              <span style={{ fontSize: '0.72rem', color: '#64748b', fontWeight: 600 }}>Remaining</span>
+              <div style={{ fontSize: '1.2rem', fontWeight: 800, color: '#dc2626' }}>{unansweredCount}</div>
+            </div>
+          </div>
+
+          <p style={{ margin: 0, fontSize: '0.825rem', color: 'var(--color-slate-600)' }}>
+            Please complete the remaining {unansweredCount} question{unansweredCount > 1 ? 's' : ''} to finalize and calculate your examination result.
+          </p>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '0.5rem' }}>
+            <Button
+              variant="secondary"
+              onClick={() => setShowIncompleteAlert(false)}
+            >
+              Return to Paper
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => {
+                setShowIncompleteAlert(false);
+                if (firstUnansweredIndex !== -1) {
+                  setCurrentQuestionIndex(firstUnansweredIndex);
+                  setActiveExamSection('mcq');
+                }
+              }}
+              style={{ backgroundColor: '#0f2744' }}
+            >
+              {firstUnansweredIndex !== -1 ? `Go to Question ${firstUnansweredIndex + 1} →` : 'Continue Answering'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Submit Confirmation Dialog (Only opens when all MCQs are completed) */}
       <ConfirmDialog
         isOpen={showSubmitConfirm}
         onClose={() => !isSubmitting && setShowSubmitConfirm(false)}

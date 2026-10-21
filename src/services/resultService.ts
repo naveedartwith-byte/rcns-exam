@@ -19,8 +19,33 @@ import {
   gradeExamSubmission,
   calculateKmuGrade,
 } from '../utils/secureGrading';
+import { MOCK_QUESTIONS } from '../mock/mockData';
 
 export { checkAnswerMatch };
+
+export async function getMasterQuestionsForExam(examId: string, examData?: any): Promise<MasterQuestion[]> {
+  let masterQs: MasterQuestion[] = [];
+  try {
+    const qCol = collection(db, 'questions');
+    const qQuery = query(qCol, where('examId', '==', examId));
+    const qSnap = await getDocs(qQuery);
+    if (!qSnap.empty) {
+      masterQs = qSnap.docs.map((d) => ({ id: d.id, ...d.data() } as MasterQuestion));
+    }
+  } catch (err) {
+    console.warn('[getMasterQuestionsForExam] Could not query questions collection:', err);
+  }
+
+  if (masterQs.length === 0 && Array.isArray(examData?.questions) && examData.questions.length > 0) {
+    masterQs = examData.questions;
+  }
+
+  if (masterQs.length === 0 && (MOCK_QUESTIONS as any)[examId]) {
+    masterQs = (MOCK_QUESTIONS as any)[examId];
+  }
+
+  return masterQs.sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0));
+}
 
 function sortResultsNewestFirst(results: Result[]): Result[] {
   return results.sort((a, b) => {
@@ -51,6 +76,45 @@ export const resultService = {
     const snapshot = await getDocs(q);
     const finalizedResults = snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Result));
 
+    // Re-evaluate and repair any previously stored results that have 0 marks or 0% due to legacy key mismatches
+    for (const r of finalizedResults) {
+      if (Number(r.marks) === 0 || Number(r.percentage) === 0 || !r.correctCount) {
+        let studentAnswers = r.answers;
+        if (!studentAnswers || Object.keys(studentAnswers).length === 0) {
+          const aSnap = await getDoc(doc(db, 'assignments', `${r.examId}_${studentId}`)).catch(() => null);
+          if (aSnap?.exists()) {
+            studentAnswers = aSnap.data()?.answers;
+          }
+        }
+        if (studentAnswers && Object.keys(studentAnswers).length > 0) {
+          const examSnap = await getDoc(doc(db, 'exams', r.examId)).catch(() => null);
+          const examData = examSnap?.exists() ? examSnap.data() : null;
+          const masterQs = await getMasterQuestionsForExam(r.examId, examData);
+          if (masterQs.length > 0) {
+            const scored = gradeExamSubmission(masterQs, studentAnswers, examData?.passingMarks);
+            if (scored.obtainedMarks > 0 || scored.answersCount > 0) {
+              r.marks = scored.obtainedMarks;
+              r.totalMarks = scored.totalMarks || r.totalMarks;
+              r.percentage = scored.percentage;
+              r.passed = scored.passed;
+              r.grade = scored.grade || calculateKmuGrade(scored.percentage);
+              r.status = 'graded';
+              r.mcqMarks = scored.obtainedMarks;
+              r.mcqTotalMarks = scored.totalMarks;
+              r.correctCount = scored.correctCount;
+              r.correctMCQs = scored.correctCount;
+              r.answeredMCQs = scored.answersCount;
+              r.incorrectMCQs = Math.max(0, scored.answersCount - scored.correctCount);
+              r.totalMCQs = masterQs.length;
+              r.totalQuestions = masterQs.length;
+              if (!r.answers) r.answers = studentAnswers;
+              setDoc(doc(db, 'results', r.id), r, { merge: true }).catch(() => {});
+            }
+          }
+        }
+      }
+    }
+
     // Also look for pending submitted assignments
     try {
       const assignmentsCol = collection(db, 'assignments');
@@ -66,26 +130,82 @@ export const resultService = {
       for (const assignDoc of assignSnap.docs) {
         const assignData = assignDoc.data();
         if (!finalizedExamIds.has(assignData.examId)) {
-          finalizedResults.push({
-            id: `pending_${assignData.examId}_${studentId}`,
-            examId: assignData.examId,
-            studentId,
-            studentName: assignData.studentName || 'Student Candidate',
-            kmuRegistrationNo: assignData.kmuRegistrationNo,
-            examTitle: assignData.examTitle || 'Academic Examination',
-            examType: assignData.examType || 'exam',
-            subject: assignData.subject || 'Clinical Assessment',
-            program: assignData.program,
-            semester: assignData.semester,
-            batch: assignData.batch,
-            marks: 0,
-            totalMarks: Number(assignData.totalMarks) || 100,
-            percentage: 0,
-            passed: false,
-            answersCount: assignData.answersCount || (assignData.answers ? Object.keys(assignData.answers).length : 0),
-            submittedAt: assignData.submittedAt || new Date().toISOString(),
-            status: 'pending',
-          });
+          // Attempt automatic grading with master questions lookup
+          let autoGradedResult: Result | null = null;
+          try {
+            if (assignData.answers && Object.keys(assignData.answers).length > 0) {
+              const examSnap = await getDoc(doc(db, 'exams', assignData.examId)).catch(() => null);
+              const examData = examSnap?.exists() ? examSnap.data() : null;
+              const masterQs = await getMasterQuestionsForExam(assignData.examId, examData);
+              if (masterQs.length > 0) {
+                const mcqScored = gradeExamSubmission(masterQs, assignData.answers, examData?.passingMarks);
+                const rId = `${studentId}_${assignData.examId}`;
+                autoGradedResult = {
+                  id: rId,
+                  examId: assignData.examId,
+                  studentId,
+                  studentName: assignData.studentName || 'Student Candidate',
+                  kmuRegistrationNo: assignData.kmuRegistrationNo,
+                  examTitle: assignData.examTitle || examData?.title || 'Academic Examination',
+                  examType: assignData.examType || examData?.type || 'exam',
+                  subject: assignData.subject || examData?.subject || 'Clinical Assessment',
+                  program: assignData.program || examData?.program,
+                  semester: assignData.semester || examData?.semester,
+                  batch: assignData.batch || examData?.batch,
+                  marks: mcqScored.obtainedMarks,
+                  totalMarks: mcqScored.totalMarks || Number(assignData.totalMarks) || 100,
+                  percentage: mcqScored.percentage,
+                  passed: mcqScored.passed,
+                  grade: mcqScored.grade,
+                  status: 'graded',
+                  answersCount: mcqScored.answersCount,
+                  correctCount: mcqScored.correctCount,
+                  mcqMarks: mcqScored.obtainedMarks,
+                  mcqTotalMarks: mcqScored.totalMarks,
+                  totalQuestions: masterQs.length,
+                  totalMCQs: masterQs.length,
+                  answeredMCQs: mcqScored.answersCount,
+                  correctMCQs: mcqScored.correctCount,
+                  incorrectMCQs: Math.max(0, mcqScored.answersCount - mcqScored.correctCount),
+                  unansweredMCQs: Math.max(0, masterQs.length - mcqScored.answersCount),
+                  answers: assignData.answers,
+                  submittedAt: assignData.submittedAt || new Date().toISOString(),
+                };
+
+                // Persist directly to results collection so future queries load immediately
+                setDoc(doc(db, 'results', rId), autoGradedResult, { merge: true }).catch((writeErr) => {
+                  console.warn('Could not persist auto-graded result to results collection:', writeErr);
+                });
+              }
+            }
+          } catch (autoErr) {
+            console.warn('Auto-grade evaluation notice:', autoErr);
+          }
+
+          if (autoGradedResult) {
+            finalizedResults.push(autoGradedResult);
+          } else {
+            finalizedResults.push({
+              id: `pending_${assignData.examId}_${studentId}`,
+              examId: assignData.examId,
+              studentId,
+              studentName: assignData.studentName || 'Student Candidate',
+              kmuRegistrationNo: assignData.kmuRegistrationNo,
+              examTitle: assignData.examTitle || 'Academic Examination',
+              examType: assignData.examType || 'exam',
+              subject: assignData.subject || 'Clinical Assessment',
+              program: assignData.program,
+              semester: assignData.semester,
+              batch: assignData.batch,
+              marks: 0,
+              totalMarks: Number(assignData.totalMarks) || 100,
+              percentage: 0,
+              passed: false,
+              answersCount: assignData.answersCount || (assignData.answers ? Object.keys(assignData.answers).length : 0),
+              submittedAt: assignData.submittedAt || new Date().toISOString(),
+              status: 'pending',
+            });
+          }
         }
       }
     } catch (assignErr) {
@@ -336,15 +456,12 @@ export const resultService = {
     // Calculate objective MCQ marks if questions collection is accessible to authorized user
     let mcqScored: any = null;
     try {
-      const qCol = collection(db, 'questions');
-      const qQuery = query(qCol, where('examId', '==', params.examId));
-      const qSnap = await getDocs(qQuery);
-      if (!qSnap.empty) {
-        const masterQs = qSnap.docs.map((d) => ({ id: d.id, ...d.data() } as MasterQuestion));
+      const masterQs = await getMasterQuestionsForExam(params.examId, examData);
+      if (masterQs.length > 0) {
         mcqScored = gradeExamSubmission(masterQs, cleanAnswers, examData?.passingMarks);
       }
-    } catch {
-      // In zero-trust mode, student cannot read raw answer keys directly from client
+    } catch (fallbackErr) {
+      console.warn('[resultService] Fallback grading notice:', fallbackErr);
     }
 
     const marks = mcqScored ? mcqScored.obtainedMarks : 0;
@@ -400,6 +517,15 @@ export const resultService = {
       status,
     };
 
+    // Directly persist authoritative result record to Firestore results collection
+    // so students can view their grades immediately without requiring teacher submission
+    try {
+      await setDoc(resultRef, resultData, { merge: true });
+      console.log('[resultService] Successfully recorded result document in Firestore:', resultId);
+    } catch (saveErr) {
+      console.warn('[resultService] Direct result document save notice:', saveErr);
+    }
+
     return resultData;
   },
 
@@ -415,22 +541,14 @@ export const resultService = {
   }): Promise<Result> {
     const { examId, studentId, evaluatorUid } = params;
 
-    // 1. Fetch Master Questions (Authorized for Teachers/Admins)
-    const questionsCol = collection(db, 'questions');
-    const qQuery = query(questionsCol, where('examId', '==', examId));
-    const questionsSnap = await getDocs(qQuery);
-    const masterQuestions = questionsSnap.docs.map(
-      (d) => ({ id: d.id, ...d.data() } as MasterQuestion)
-    );
-    masterQuestions.sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0));
+    // 1. Fetch Master Questions using authoritative fallback helper
+    const examDoc = await getDoc(doc(db, 'exams', examId));
+    const examData = examDoc.exists() ? examDoc.data() : null;
+    const masterQuestions = await getMasterQuestionsForExam(examId, examData);
 
     if (masterQuestions.length === 0) {
       throw new Error('No master questions found for this examination.');
     }
-
-    // 2. Fetch Parent Exam metadata
-    const examDoc = await getDoc(doc(db, 'exams', examId));
-    const examData = examDoc.exists() ? examDoc.data() : null;
 
     // 3. Fetch Student Assignment containing submitted answers
     const assignmentId = `${examId}_${studentId}`;

@@ -175,22 +175,31 @@ export function gradeExamSubmission(
     const qMarks = !isNaN(rawMarks) && Number.isFinite(rawMarks) && rawMarks > 0 ? rawMarks : 1;
     totalMarks += qMarks;
 
-    // Resolve student answer by Question ID, or by index / order fallbacks
+    // Resolve student answer by Question ID, or by index / order / prefixed fallbacks
     let submittedAnswer: any = undefined;
 
     if (answers && typeof answers === 'object') {
-      if (q.id && answers[q.id] !== undefined) {
-        submittedAnswer = answers[q.id];
-      } else if (answers[i] !== undefined) {
-        submittedAnswer = answers[i];
-      } else if (answers[String(i)] !== undefined) {
-        submittedAnswer = answers[String(i)];
-      } else if (q.order !== undefined && answers[q.order] !== undefined) {
-        submittedAnswer = answers[q.order];
-      } else if (q.order !== undefined && answers[String(q.order)] !== undefined) {
-        submittedAnswer = answers[String(q.order)];
-      } else if (q.order !== undefined && answers[q.order - 1] !== undefined) {
-        submittedAnswer = answers[q.order - 1];
+      const candidateKeys = [
+        q.id,
+        i,
+        String(i),
+        `q-${i + 1}`,
+        `q${i + 1}`,
+        i + 1,
+        String(i + 1),
+        q.order,
+        q.order !== undefined ? String(q.order) : undefined,
+        q.order !== undefined ? `q-${q.order}` : undefined,
+        q.order !== undefined ? `q${q.order}` : undefined,
+        q.order !== undefined ? q.order - 1 : undefined,
+        q.order !== undefined ? String(q.order - 1) : undefined,
+      ].filter((k) => k !== undefined && k !== null);
+
+      for (const key of candidateKeys) {
+        if (answers[key as any] !== undefined) {
+          submittedAnswer = answers[key as any];
+          break;
+        }
       }
     }
 

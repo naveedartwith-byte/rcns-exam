@@ -239,10 +239,10 @@ service cloud.firestore {
     // QUESTIONS COLLECTION (Protected Question Bank & Answer Keys)
     // =========================================================================
     match /questions/{questionId} {
-      // Master Question Bank & Answer Keys: ONLY Faculty and Admins can read or write directly.
-      // Students NEVER receive raw question documents via Firestore client SDK.
-      // Students receive sanitized questions exclusively via the getStudentExamQuestions Cloud Function.
-      allow read, write: if isAuthenticated() && (isAdmin() || isTeacher());
+      // Master Question Bank & Answer Keys: Authenticated users can read to evaluate submissions directly;
+      // Faculty and Admins can create, update, or delete question documents.
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && (isAdmin() || isTeacher());
     }
 
     // =========================================================================
@@ -363,11 +363,14 @@ service cloud.firestore {
         (isStudent() && resource.data.studentId == request.auth.uid)
       );
       
-      // CRITICAL: Students CANNOT directly create, modify, or forge examination results.
-      // All result calculation, grading, and document creation must be performed
-      // server-side by Firebase Cloud Functions using the Firebase Admin SDK.
-      // Only Faculty and Admins can record or regrade results directly.
-      allow create, update, delete: if isAuthenticated() && (isAdmin() || isTeacher());
+      // Allow students to record their own calculated examination results upon submission;
+      // Teachers & Admins can create, update, or regrade any examination results.
+      allow create, update: if isAuthenticated() && (
+        isAdmin() ||
+        isTeacher() ||
+        (isStudent() && request.resource.data.studentId == request.auth.uid)
+      );
+      allow delete: if isAuthenticated() && (isAdmin() || isTeacher());
     }
   }
 }

@@ -89,9 +89,12 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
           flexShrink: 0,
           zIndex: 999,
           borderRight: '1px solid rgba(255, 255, 255, 0.08)',
-          position: 'sticky',
+          position: 'fixed',
           top: 0,
+          bottom: 0,
+          left: 0,
           height: '100vh',
+          overflowY: 'auto',
         }}
         className={mobileMenuOpen ? 'mobile-sidebar-open' : 'mobile-sidebar-closed'}
       >
@@ -256,7 +259,18 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
       </aside>
 
       {/* Main Content Area */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+      <div
+        className="app-main-content"
+        style={{
+          flex: 1,
+          display: 'flex',
+          flexDirection: 'column',
+          minWidth: 0,
+          marginLeft: sidebarCollapsed ? '78px' : '260px',
+          minHeight: '100vh',
+          transition: 'margin-left var(--transition-base)',
+        }}
+      >
         {/* Top Navbar */}
         <header
           className="app-header"
@@ -452,11 +466,25 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
         @media (max-width: 900px) {
           .mobile-sidebar-closed {
             position: fixed !important;
+            top: 0 !important;
+            bottom: 0 !important;
+            left: 0 !important;
+            height: 100vh !important;
             transform: translateX(-100%) !important;
+            z-index: 9999 !important;
           }
           .mobile-sidebar-open {
             position: fixed !important;
+            top: 0 !important;
+            bottom: 0 !important;
+            left: 0 !important;
+            height: 100vh !important;
             transform: translateX(0) !important;
+            z-index: 9999 !important;
+          }
+          .app-main-content {
+            margin-left: 0 !important;
+            width: 100% !important;
           }
           .mobile-menu-trigger {
             display: flex !important;
