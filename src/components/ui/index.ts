@@ -21,3 +21,4 @@ export * from './StatCard';
 export * from './Logo';
 export * from './Dropdown';
 export * from './Toast';
+export * from './KmuRegistrationInput';

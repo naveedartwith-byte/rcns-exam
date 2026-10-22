@@ -18,7 +18,10 @@ import {
 } from '../../components/ui';
 import { examService } from '../../services/examService';
 import { studentService } from '../../services/studentService';
+import { resultService } from '../../services/resultService';
+import { calculateCategoryPerformance } from '../../utils/academicAnalytics';
 import type { Exam } from '../../types/exam';
+import type { Result } from '../../types/result';
 
 export const TeacherDashboardPage: React.FC = () => {
   const { currentUser, userProfile, teacherProfile } = useAuth();
@@ -29,19 +32,22 @@ export const TeacherDashboardPage: React.FC = () => {
 
   const [teacherExams, setTeacherExams] = useState<Exam[]>([]);
   const [totalStudents, setTotalStudents] = useState<number>(0);
+  const [results, setResults] = useState<Result[]>([]);
 
   useEffect(() => {
     let isMounted = true;
     const fetchTeacherData = async () => {
       try {
         if (currentUser) {
-          const [exams, students] = await Promise.all([
+          const [exams, students, allResults] = await Promise.all([
             examService.getExamsByTeacher(currentUser.uid),
             studentService.getAllStudents(),
+            resultService.getAllResults(),
           ]);
           if (isMounted) {
             setTeacherExams(exams);
             setTotalStudents(students.length);
+            setResults(allResults);
           }
         }
       } catch (err) {
@@ -54,8 +60,10 @@ export const TeacherDashboardPage: React.FC = () => {
     };
   }, [currentUser]);
 
-  const activeExams = teacherExams.filter((e) => e.status === 'active');
-  const draftExams = teacherExams.filter((e) => e.status === 'draft');
+  const teacherExamIds = new Set(teacherExams.map((e) => e.id));
+  const relevantResults = results.filter((r) => teacherExamIds.has(r.examId));
+  const statsResults = relevantResults.length > 0 ? relevantResults : results;
+  const categoryStats = calculateCategoryPerformance(statsResults);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.75rem' }}>
@@ -133,27 +141,26 @@ export const TeacherDashboardPage: React.FC = () => {
         />
 
         <StatCard
-          title="Active Exams"
-          value={activeExams.length}
-          subtitle="Open for candidate testing"
-          variant="teal"
+          title="Class Quiz Average"
+          value={categoryStats.quizHasData ? `${categoryStats.quizPercentage}%` : '—'}
+          subtitle={categoryStats.quizHasData ? `${categoryStats.quizCount} evaluated quizzes` : 'No quizzes graded'}
+          variant="gold"
           icon={
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <circle cx="12" cy="12" r="10" />
-              <polyline points="12 6 12 12 16 14" />
+              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
             </svg>
           }
         />
 
         <StatCard
-          title="Draft Papers"
-          value={draftExams.length}
-          subtitle="Pending question setup"
-          variant="gold"
+          title="Mid-Term Average"
+          value={categoryStats.midtermHasData ? `${categoryStats.midtermPercentage}%` : '—'}
+          subtitle={categoryStats.midtermHasData ? `${categoryStats.midtermCount} mid-term papers` : 'No mid-term graded'}
+          variant="teal"
           icon={
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+              <circle cx="12" cy="12" r="10" />
+              <path d="m9 12 2 2 4-4" />
             </svg>
           }
         />

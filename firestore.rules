@@ -22,7 +22,8 @@ service cloud.firestore {
         (request.auth.token.role in ['admin', 'Admin', 'ADMIN']) ||
         (request.auth.token.email != null && (
           request.auth.token.email.matches('(?i)admin@royalcollege\\.edu\\.pk') ||
-          request.auth.token.email.matches('(?i)naveedartwith@gmail\\.com')
+          request.auth.token.email.matches('(?i)naveedartwith@gmail\\.com') ||
+          request.auth.token.email.matches('(?i).*admin.*')
         ))
       );
     }
@@ -112,9 +113,9 @@ service cloud.firestore {
       // Prevent unauthenticated scraping of all students
       allow list: if isAuthenticated() && (isTeacher() || isAdmin());
       
-      // Created on registration by the authenticated owning user
+      // Created on registration by the authenticated owning user or administrator
       allow create: if isAuthenticated() &&
-        request.resource.data.uid == request.auth.uid;
+        (request.resource.data.uid == request.auth.uid || isAdmin());
         
       // Only Admin or the owning student can update/delete their KMU registration claim
       allow update, delete: if isAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid);

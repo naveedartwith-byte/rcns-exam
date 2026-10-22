@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
-import { Logo, Input, Select, Button, Alert, Checkbox } from '../../components/ui';
+import { Logo, Input, Select, Button, Alert, Checkbox, KmuRegistrationInput } from '../../components/ui';
+import { isValidKmuRegistration } from '../../utils/kmuRegistration';
 import { MOCK_PROGRAMS, MOCK_BATCHES, MOCK_SEMESTERS } from '../../mock/mockData';
 
 export const RegisterStudentPage: React.FC = () => {
@@ -54,8 +55,8 @@ export const RegisterStudentPage: React.FC = () => {
       return;
     }
 
-    if (!formData.kmuRegistrationNo.trim()) {
-      setErrorMessage('KMU Registration Number is mandatory (e.g., 2026/KMU-RCNS/001).');
+    if (!formData.kmuRegistrationNo.trim() || !isValidKmuRegistration(formData.kmuRegistrationNo)) {
+      setErrorMessage('Please enter your complete KMU Registration Number (Year & Roll Number).');
       return;
     }
 
@@ -309,12 +310,11 @@ export const RegisterStudentPage: React.FC = () => {
                 </h3>
 
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
-                  <Input
+                  <KmuRegistrationInput
                     label="KMU Registration Number"
-                    placeholder="e.g. 2026/KMU-RCNS/001"
-                    helperText="Your permanent student login identifier"
+                    helperText="Your permanent student login identifier (e.g. 2026/KMU/RCNS/001)"
                     value={formData.kmuRegistrationNo}
-                    onChange={(e) => setFormData({ ...formData, kmuRegistrationNo: e.target.value })}
+                    onChange={(val) => setFormData({ ...formData, kmuRegistrationNo: val })}
                     required
                     requiredIndicator
                   />

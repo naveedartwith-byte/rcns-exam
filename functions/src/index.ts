@@ -476,3 +476,86 @@ export const submitExamAttempt = onCall(
   }
 );
 
+/**
+ * Cloud Function: adminUpdateStudentPassword
+ * Allows authorized administrators to securely change/reset a student's password in Firebase Authentication.
+ */
+export const adminUpdateStudentPassword = onCall(
+  { region: FUNCTION_REGION },
+  async (request) => {
+    // 1. Verify caller authentication
+    if (!request.auth || !request.auth.uid) {
+      throw new HttpsError('unauthenticated', 'Caller must be authenticated.');
+    }
+
+    const callerUid = request.auth.uid;
+
+    // 2. Authoritative Admin verification
+    let isCallerAdmin = false;
+
+    // Check custom claims
+    if (request.auth.token?.role === 'admin' || request.auth.token?.admin === true) {
+      isCallerAdmin = true;
+    }
+
+    // Check institutional admin email pattern
+    const callerEmail = request.auth.token?.email || '';
+    if (
+      callerEmail.toLowerCase() === 'admin@royalcollege.edu.pk' ||
+      callerEmail.toLowerCase() === 'naveedartwith@gmail.com'
+    ) {
+      isCallerAdmin = true;
+    }
+
+    // Check Firestore admins collection
+    if (!isCallerAdmin) {
+      const adminDoc = await db.collection('admins').doc(callerUid).get();
+      if (adminDoc.exists) {
+        isCallerAdmin = true;
+      }
+    }
+
+    // Check Firestore users collection role
+    if (!isCallerAdmin) {
+      const userDoc = await db.collection('users').doc(callerUid).get();
+      if (userDoc.exists && userDoc.data()?.role?.toLowerCase() === 'admin') {
+        isCallerAdmin = true;
+      }
+    }
+
+    if (!isCallerAdmin) {
+      throw new HttpsError('permission-denied', 'Only authorized administrators can change student passwords.');
+    }
+
+    const { studentUid, newPassword } = (request.data || {}) as {
+      studentUid?: string;
+      newPassword?: string;
+    };
+
+    if (!studentUid || typeof studentUid !== 'string') {
+      throw new HttpsError('invalid-argument', 'Valid student UID is required.');
+    }
+
+    if (!newPassword || typeof newPassword !== 'string' || newPassword.length < 6) {
+      throw new HttpsError('invalid-argument', 'Password must be at least 6 characters long.');
+    }
+
+    // 3. Update student password in Firebase Authentication
+    try {
+      await admin.auth().updateUser(studentUid, {
+        password: newPassword,
+      });
+
+      console.log(`[Admin Password Update] Administrator ${callerUid} successfully updated password for student ${studentUid}`);
+
+      return {
+        success: true,
+        message: 'Student password successfully updated in Firebase Authentication.',
+      };
+    } catch (authErr: any) {
+      console.error('[Admin Password Update Error]', authErr);
+      throw new HttpsError('internal', authErr.message || 'Failed to update student password in Firebase Auth.');
+    }
+  }
+);
+

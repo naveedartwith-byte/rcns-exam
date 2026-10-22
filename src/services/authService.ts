@@ -48,10 +48,19 @@ export const authService = {
       try {
         const kmuSnap = await getDoc(doc(db, 'kmuRegistrations', key));
         if (kmuSnap.exists()) {
-          const regData = kmuSnap.data() as { email?: string };
-          if (regData?.email) {
+          const regData = kmuSnap.data() as { email?: string; uid?: string };
+          if (regData?.email && regData.email.trim()) {
             foundEmail = regData.email.trim();
             break;
+          } else if (regData?.uid) {
+            // Self-healing: if email is missing in kmuRegistrations, recover from user or student document
+            try {
+              const userSnap = await getDoc(doc(db, 'users', regData.uid));
+              if (userSnap.exists() && userSnap.data()?.email) {
+                foundEmail = userSnap.data().email.trim();
+                break;
+              }
+            } catch {}
           }
         }
       } catch (err) {
@@ -121,17 +130,24 @@ export const authService = {
       console.log('[Registration Step 3] Writing Firestore batch for UID:', uid);
       // 3. Atomically write kmuRegistrations, users, and students records
       const batch = writeBatch(db);
-      const kmuRef = doc(db, 'kmuRegistrations', normalizedKmu);
       const userRef = doc(db, 'users', uid);
       const studentRef = doc(db, 'students', uid);
 
-      // Reserve KMU Registration with email mapping
-      batch.set(kmuRef, {
-        uid,
-        email: data.email.trim(),
-        kmuRegistrationNo: data.kmuRegistrationNo.trim(),
-        normalizedRegistrationNo: normalizedKmu,
-        registeredAt: serverTimestamp(),
+      // Reserve KMU Registration with all lookup candidate variations
+      const candidateKeys = generateKmuLookupCandidates(data.kmuRegistrationNo.trim());
+      candidateKeys.forEach((key) => {
+        batch.set(
+          doc(db, 'kmuRegistrations', key),
+          {
+            uid,
+            email: data.email.trim(),
+            kmuRegistrationNo: data.kmuRegistrationNo.trim(),
+            normalizedRegistrationNo: normalizedKmu,
+            registeredAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true }
+        );
       });
 
       // Create common user record
@@ -140,11 +156,12 @@ export const authService = {
         role: 'student',
         name: data.name.trim(),
         email: data.email.trim(),
+        kmuRegistrationNo: data.kmuRegistrationNo.trim(),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
 
-      // Create student profile record
+      // Create student profile record with passKey for authoritative admin management
       batch.set(studentRef, {
         uid,
         role: 'student',
@@ -157,6 +174,7 @@ export const authService = {
         program: data.program.trim(),
         department: data.department.trim(),
         status: 'active',
+        passKey: data.password,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });

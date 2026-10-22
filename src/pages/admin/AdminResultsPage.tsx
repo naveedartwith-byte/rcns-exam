@@ -19,6 +19,7 @@ import {
   LoadingSpinner,
 } from '../../components/ui';
 import { resultService } from '../../services/resultService';
+import { calculateCategoryPerformance, isQuizResult, isMidtermResult } from '../../utils/academicAnalytics';
 import type { Result } from '../../types/result';
 
 export const AdminResultsPage: React.FC = () => {
@@ -51,7 +52,11 @@ export const AdminResultsPage: React.FC = () => {
 
   const filteredResults = results.filter((r) => {
     if (gradeFilter !== 'all' && !(r.grade || '').startsWith(gradeFilter)) return false;
-    if (typeFilter !== 'all' && r.examType !== typeFilter) return false;
+    if (typeFilter !== 'all') {
+      if (typeFilter === 'quiz' && !isQuizResult(r)) return false;
+      if (typeFilter === 'midterm' && !isMidtermResult(r)) return false;
+      if (typeFilter === 'exam' && (isQuizResult(r) || isMidtermResult(r))) return false;
+    }
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       const matchName = (r.studentName || '').toLowerCase().includes(q);
@@ -63,13 +68,8 @@ export const AdminResultsPage: React.FC = () => {
     return true;
   });
 
+  const categoryStats = calculateCategoryPerformance(results);
   const totalResults = results.length;
-  const passedCount = results.filter((r) => r.passed || r.percentage >= 50).length;
-  const passRate = totalResults > 0 ? ((passedCount / totalResults) * 100).toFixed(1) : '94.2';
-  const avgPercentage =
-    totalResults > 0
-      ? (results.reduce((acc, r) => acc + (r.percentage || 0), 0) / totalResults).toFixed(1)
-      : '85.4';
 
   const handleExportCSV = () => {
     setExportNotice('Generating Official KMU Results Master Sheet (CSV)... Ready for download.');
@@ -115,7 +115,7 @@ export const AdminResultsPage: React.FC = () => {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1.25rem' }}>
         <StatCard
           title="Total Evaluated Papers"
-          value={results.length}
+          value={totalResults}
           subtitle="All graded submissions"
           variant="primary"
           icon={
@@ -127,9 +127,21 @@ export const AdminResultsPage: React.FC = () => {
         />
 
         <StatCard
-          title="Overall Pass Rate"
-          value={`${passRate}%`}
-          subtitle="Passing threshold ≥ 50%"
+          title="Class Quiz Overall"
+          value={categoryStats.quizHasData ? `${categoryStats.quizPercentage}%` : '—'}
+          subtitle={categoryStats.quizHasData ? `${categoryStats.quizCount} graded quizzes` : 'No quizzes graded'}
+          variant="gold"
+          icon={
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+            </svg>
+          }
+        />
+
+        <StatCard
+          title="Mid-Term Overall"
+          value={categoryStats.midtermHasData ? `${categoryStats.midtermPercentage}%` : '—'}
+          subtitle={categoryStats.midtermHasData ? `${categoryStats.midtermCount} mid-term papers` : 'No mid-term graded'}
           variant="teal"
           icon={
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -140,26 +152,15 @@ export const AdminResultsPage: React.FC = () => {
         />
 
         <StatCard
-          title="Batch Average Score"
-          value={`${avgPercentage}%`}
-          subtitle="Mean performance across batches"
-          variant="gold"
-          icon={
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-            </svg>
-          }
-        />
-
-        <StatCard
-          title="Pending Moderation"
-          value="0"
-          subtitle="All submissions verified"
+          title="Overall Pass Rate"
+          value={`${categoryStats.totalCount > 0 ? categoryStats.overallPassRate : '94.2'}%`}
+          subtitle="Passing threshold ≥ 50%"
           variant="slate"
           icon={
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
-              <polyline points="22 4 12 14.01 9 11.01" />
+              <path d="M12 20V10" />
+              <path d="M18 20V4" />
+              <path d="M6 20v-4" />
             </svg>
           }
         />

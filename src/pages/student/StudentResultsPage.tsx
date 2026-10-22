@@ -20,6 +20,7 @@ import {
 } from '../../components/ui';
 import { useAuth } from '../../hooks/useAuth';
 import { resultService } from '../../services/resultService';
+import { calculateCategoryPerformance, isQuizResult, isMidtermResult } from '../../utils/academicAnalytics';
 import type { Result } from '../../types/result';
 
 export const StudentResultsPage: React.FC = () => {
@@ -60,7 +61,11 @@ export const StudentResultsPage: React.FC = () => {
   // Filtered results, sorted newest submitted first (Requirement #9)
   const filteredResults = results
     .filter((r) => {
-      if (typeFilter !== 'all' && r.examType !== typeFilter) return false;
+      if (typeFilter !== 'all') {
+        if (typeFilter === 'quiz' && !isQuizResult(r)) return false;
+        if (typeFilter === 'midterm' && !isMidtermResult(r)) return false;
+        if (typeFilter === 'exam' && (isQuizResult(r) || isMidtermResult(r))) return false;
+      }
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         const matchSub = (r.subject || '').toLowerCase().includes(q);
@@ -75,18 +80,9 @@ export const StudentResultsPage: React.FC = () => {
       return timeB - timeA;
     });
 
-  // All evaluated quizzes & exams counted in Total Exam Graded (Requirement #7)
-  const gradedResults = results.filter((r) => r.status === 'graded' || (r.percentage !== undefined && r.percentage !== null));
-  const totalEvaluated = gradedResults.length;
-
-  // Accurate percentage calculated across all student quizzes (Requirement #8)
-  const totalMarksObtained = gradedResults.reduce((acc, r) => acc + (Number(r.marks) || 0), 0);
-  const totalMaxMarks = gradedResults.reduce((acc, r) => acc + (Number(r.totalMarks) || 0), 0);
-  const accuratePercentage = totalMaxMarks > 0
-    ? ((totalMarksObtained / totalMaxMarks) * 100).toFixed(1)
-    : gradedResults.length > 0
-    ? (gradedResults.reduce((acc, r) => acc + (Number(r.percentage) || 0), 0) / gradedResults.length).toFixed(1)
-    : '0.0';
+  // Calculate separate Class Quiz & Mid-Term performance analytics (Requirement #4)
+  const categoryStats = calculateCategoryPerformance(results);
+  const totalEvaluated = categoryStats.totalCount;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.75rem' }}>
@@ -100,12 +96,12 @@ export const StudentResultsPage: React.FC = () => {
         </p>
       </div>
 
-      {/* KPI Performance Summary: Cumulative GPA & Academic Standing removed per Requirement #6 */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '1.25rem' }}>
+      {/* KPI Performance Summary: Class Quiz & Mid-Term Overall Percentages displayed separately */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1.25rem' }}>
         <StatCard
           title="Total Exams Graded"
           value={totalEvaluated}
-          subtitle="All evaluated quizzes & examinations"
+          subtitle="All evaluated quizzes & papers"
           variant="primary"
           icon={
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -118,14 +114,40 @@ export const StudentResultsPage: React.FC = () => {
         />
 
         <StatCard
-          title="Percentage"
-          value={`${accuratePercentage}%`}
-          subtitle="Accurate evaluated score across all quizzes"
+          title="Class Quiz Overall"
+          value={categoryStats.quizHasData ? `${categoryStats.quizPercentage}%` : '—'}
+          subtitle={categoryStats.quizHasData ? `${categoryStats.quizCount} evaluated quizzes` : 'No quizzes graded yet'}
+          variant="gold"
+          icon={
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+            </svg>
+          }
+        />
+
+        <StatCard
+          title="Mid-Term Overall"
+          value={categoryStats.midtermHasData ? `${categoryStats.midtermPercentage}%` : '—'}
+          subtitle={categoryStats.midtermHasData ? `${categoryStats.midtermCount} mid-term papers` : 'No mid-term graded yet'}
           variant="teal"
           icon={
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <circle cx="12" cy="12" r="10" />
               <path d="m9 12 2 2 4-4" />
+            </svg>
+          }
+        />
+
+        <StatCard
+          title="Cumulative Total"
+          value={`${categoryStats.overallPercentage}%`}
+          subtitle="Overall academic benchmark"
+          variant="slate"
+          icon={
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M12 20V10" />
+              <path d="M18 20V4" />
+              <path d="M6 20v-4" />
             </svg>
           }
         />

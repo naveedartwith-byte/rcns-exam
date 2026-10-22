@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
-import { Logo, Input, Button, Alert, Checkbox } from '../../components/ui';
+import { Logo, Input, Button, Alert, Checkbox, KmuRegistrationInput } from '../../components/ui';
+import { isValidKmuRegistration } from '../../utils/kmuRegistration';
 import { getDefaultDashboardRoute } from '../../utils/permissions';
 
 export const LoginPage: React.FC = () => {
@@ -33,19 +34,17 @@ export const LoginPage: React.FC = () => {
   // Determine redirect path safely without 403 loops
   const from = (location.state as { from?: { pathname: string } })?.from?.pathname;
 
-  const handleKmuFocus = () => {
-    if (!kmuRegNo || !kmuRegNo.trim()) {
-      setKmuRegNo('2026/KMU/RCNS/');
-    }
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
 
     if (activePortalTab === 'student') {
-      if (!kmuRegNo.trim() || !password) {
-        setErrorMessage('Please enter both KMU Registration Number and password.');
+      if (!kmuRegNo.trim() || !isValidKmuRegistration(kmuRegNo)) {
+        setErrorMessage('Please enter your complete KMU Registration Number (Year & Roll Number).');
+        return;
+      }
+      if (!password) {
+        setErrorMessage('Please enter your student password.');
         return;
       }
     } else {
@@ -384,21 +383,13 @@ export const LoginPage: React.FC = () => {
           <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             {activePortalTab === 'student' ? (
               /* STUDENT LOGIN: KMU Registration Number + Password */
-              <Input
+              <KmuRegistrationInput
                 label="KMU Registration Number"
-                placeholder="2026/KMU/RCNS/01"
                 value={kmuRegNo}
-                onFocus={handleKmuFocus}
-                onClick={handleKmuFocus}
-                onChange={(e) => setKmuRegNo(e.target.value)}
+                onChange={(val) => setKmuRegNo(val)}
+                helperText="Permanent KMU identifier (e.g. 2026/KMU/RCNS/001)"
                 required
                 requiredIndicator
-                leftIcon={
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
-                    <circle cx="12" cy="7" r="4" />
-                  </svg>
-                }
               />
             ) : (
               /* FACULTY / ADMIN LOGIN: Institutional Email + Password */

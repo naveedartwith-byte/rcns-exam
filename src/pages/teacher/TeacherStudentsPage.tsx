@@ -20,6 +20,7 @@ import {
 import { MOCK_PROGRAMS, MOCK_SEMESTERS } from '../../mock/mockData';
 import { studentService } from '../../services/studentService';
 import { resultService } from '../../services/resultService';
+import { calculateCategoryPerformance } from '../../utils/academicAnalytics';
 import type { StudentProfile } from '../../types/student';
 import type { Result } from '../../types/result';
 
@@ -283,7 +284,39 @@ export const TeacherStudentsPage: React.FC = () => {
               No examination records found for this candidate yet.
             </div>
           ) : (
-            <TableContainer>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              {(() => {
+                const studentCategoryStats = calculateCategoryPerformance(studentResults);
+                return (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.75rem', padding: '0.75rem', backgroundColor: '#f8fafc', borderRadius: 'var(--radius-md)', border: '1px solid #e2e8f0' }}>
+                    <div style={{ padding: '0.5rem 0.75rem', backgroundColor: '#ffffff', borderRadius: 'var(--radius-sm)', border: '1px solid #f1f5f9' }}>
+                      <span style={{ fontSize: '0.75rem', color: '#b45309', fontWeight: 700, textTransform: 'uppercase' }}>Class Quiz Overall</span>
+                      <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#0f2744' }}>
+                        {studentCategoryStats.quizHasData ? `${studentCategoryStats.quizPercentage}%` : '—'}
+                      </div>
+                      <span style={{ fontSize: '0.72rem', color: 'var(--color-slate-500)' }}>{studentCategoryStats.quizCount} Quizzes Evaluated</span>
+                    </div>
+
+                    <div style={{ padding: '0.5rem 0.75rem', backgroundColor: '#ffffff', borderRadius: 'var(--radius-sm)', border: '1px solid #f1f5f9' }}>
+                      <span style={{ fontSize: '0.75rem', color: '#0f766e', fontWeight: 700, textTransform: 'uppercase' }}>Mid-Term Overall</span>
+                      <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#0f2744' }}>
+                        {studentCategoryStats.midtermHasData ? `${studentCategoryStats.midtermPercentage}%` : '—'}
+                      </div>
+                      <span style={{ fontSize: '0.72rem', color: 'var(--color-slate-500)' }}>{studentCategoryStats.midtermCount} Mid-Terms Evaluated</span>
+                    </div>
+
+                    <div style={{ padding: '0.5rem 0.75rem', backgroundColor: '#ffffff', borderRadius: 'var(--radius-sm)', border: '1px solid #f1f5f9' }}>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--color-slate-600)', fontWeight: 700, textTransform: 'uppercase' }}>Cumulative Total</span>
+                      <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#0f2744' }}>
+                        {studentCategoryStats.overallPercentage}%
+                      </div>
+                      <span style={{ fontSize: '0.72rem', color: 'var(--color-slate-500)' }}>Overall Pass Rate: {studentCategoryStats.overallPassRate}%</span>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              <TableContainer>
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -325,6 +358,7 @@ export const TeacherStudentsPage: React.FC = () => {
                 </TableBody>
               </Table>
             </TableContainer>
+          </div>
           )}
         </Modal>
       )}

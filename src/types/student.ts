@@ -16,14 +16,17 @@ export interface StudentProfile {
   address?: string;
   gpa?: number;
   status?: 'active' | 'suspended' | 'inactive';
+  passKey?: string;
   createdAt: Timestamp | string;
   updatedAt: Timestamp | string;
 }
 
 export interface KmuRegistrationRecord {
   uid: string;
+  email?: string;
   kmuRegistrationNo: string;
   normalizedRegistrationNo: string;
   registeredAt: Timestamp | string;
+  updatedAt?: Timestamp | string;
 }
 

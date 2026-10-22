@@ -19,9 +19,12 @@ import {
   Alert,
   EmptyState,
   LoadingSpinner,
+  KmuRegistrationInput,
 } from '../../components/ui';
-import { MOCK_PROGRAMS, MOCK_SEMESTERS } from '../../mock/mockData';
+import { MOCK_PROGRAMS, MOCK_SEMESTERS, MOCK_BATCHES } from '../../mock/mockData';
 import { studentService } from '../../services/studentService';
+import { adminService } from '../../services/adminService';
+import { isValidKmuRegistration } from '../../utils/kmuRegistration';
 import type { StudentProfile } from '../../types/student';
 
 export const AdminStudentsPage: React.FC = () => {
@@ -57,6 +60,19 @@ export const AdminStudentsPage: React.FC = () => {
   const [isDeletingStudent, setIsDeletingStudent] = useState<boolean>(false);
   const [notification, setNotification] = useState<string | null>(null);
 
+  // Edit / Add state
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  // Password Management modal state (Requirement #3)
+  const [passwordModalStudent, setPasswordModalStudent] = useState<StudentProfile | null>(null);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [passwordSuccess, setPasswordSuccess] = useState<string | null>(null);
+
   // Form State
   const [formData, setFormData] = useState({
     name: '',
@@ -86,11 +102,12 @@ export const AdminStudentsPage: React.FC = () => {
   });
 
   const handleOpenAddModal = () => {
+    setSaveError(null);
     setFormData({
       name: '',
       fatherName: '',
       email: '',
-      kmuRegistrationNo: `2026/KMU-RCNS/00${students.length + 1}`,
+      kmuRegistrationNo: `2026/KMU/RCNS/00${students.length + 1}`,
       program: 'BS Nursing (Generic)',
       department: 'Nursing & Allied Health Sciences',
       batch: 'Batch 15th',
@@ -102,6 +119,7 @@ export const AdminStudentsPage: React.FC = () => {
   };
 
   const handleOpenEditModal = (s: StudentProfile) => {
+    setSaveError(null);
     setEditingStudent(s);
     setFormData({
       name: s.name,
@@ -117,25 +135,114 @@ export const AdminStudentsPage: React.FC = () => {
     });
   };
 
+  const handleOpenPasswordModal = (s: StudentProfile) => {
+    setPasswordModalStudent(s);
+    setNewPassword('');
+    setConfirmPassword('');
+    setCurrentPassword(s.passKey || '');
+    setPasswordError(null);
+    setPasswordSuccess(null);
+  };
+
+  const handleAdminChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!passwordModalStudent) return;
+    setPasswordError(null);
+    setPasswordSuccess(null);
+
+    if (!newPassword || newPassword.length < 6) {
+      setPasswordError('Password must be at least 6 characters long.');
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setPasswordError('New password and confirmation do not match.');
+      return;
+    }
+
+    try {
+      setIsUpdatingPassword(true);
+      const result = await adminService.updateStudentPassword(
+        passwordModalStudent.uid,
+        passwordModalStudent.email,
+        newPassword,
+        currentPassword
+      );
+
+      setPasswordSuccess(result.message);
+      setNotification(`Candidate password updated for ${passwordModalStudent.name}`);
+      await fetchStudents();
+      setTimeout(() => {
+        setPasswordModalStudent(null);
+        setNotification(null);
+      }, 2500);
+    } catch (err: any) {
+      console.error('Error changing student password:', err);
+      setPasswordError(err.message || 'Failed to update student password.');
+    } finally {
+      setIsUpdatingPassword(false);
+    }
+  };
+
+  const handleAdminSendResetEmail = async () => {
+    if (!passwordModalStudent || !passwordModalStudent.email) return;
+    setPasswordError(null);
+    setPasswordSuccess(null);
+
+    try {
+      setIsUpdatingPassword(true);
+      await adminService.sendStudentPasswordReset(passwordModalStudent.email);
+      setPasswordSuccess(`Password reset email link sent to ${passwordModalStudent.email}`);
+    } catch (err: any) {
+      console.error('Error sending reset email:', err);
+      setPasswordError(err.message || 'Failed to send password reset email.');
+    } finally {
+      setIsUpdatingPassword(false);
+    }
+  };
+
   const handleSaveStudent = async (e: React.FormEvent) => {
     e.preventDefault();
+    setSaveError(null);
+
+    if (!formData.name.trim()) {
+      setSaveError('Student Name is mandatory.');
+      return;
+    }
+
+    if (!formData.kmuRegistrationNo.trim() || !isValidKmuRegistration(formData.kmuRegistrationNo)) {
+      setSaveError('Please enter a valid KMU Registration Number (e.g., 2026/KMU/RCNS/001).');
+      return;
+    }
+
+    setIsSaving(true);
     if (editingStudent) {
       try {
-        await studentService.updateStudentProfile(editingStudent.uid, {
+        await studentService.updateStudentByAdmin(editingStudent.uid, editingStudent, {
           name: formData.name,
           fatherName: formData.fatherName,
+          email: formData.email || editingStudent.email || '',
+          kmuRegistrationNo: formData.kmuRegistrationNo,
+          program: formData.program,
+          department: formData.department,
+          batch: formData.batch,
+          semester: formData.semester,
           phone: formData.phone,
           address: formData.address,
         });
-        setNotification(`Student record for ${formData.name} updated successfully.`);
-        fetchStudents();
-      } catch (err) {
+        setNotification(`Student record for ${formData.name} successfully updated in Firebase.`);
+        await fetchStudents();
+        setEditingStudent(null);
+      } catch (err: any) {
         console.error('Error updating student profile:', err);
+        setSaveError(err.message || 'Failed to update student profile in Firebase.');
+      } finally {
+        setIsSaving(false);
       }
-      setEditingStudent(null);
     } else {
       setNotification(`Candidate record created in registry.`);
       setIsAddModalOpen(false);
+      setIsSaving(false);
     }
     setTimeout(() => setNotification(null), 3500);
   };
@@ -314,6 +421,19 @@ export const AdminStudentsPage: React.FC = () => {
                           Edit
                         </Button>
                         <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleOpenPasswordModal(s)}
+                          style={{ borderColor: '#cbd5e1', color: '#0f2744' }}
+                          title="Change candidate password"
+                        >
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ marginRight: '0.2rem' }}>
+                            <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                            <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                          </svg>
+                          Pass
+                        </Button>
+                        <Button
                           variant={s.status === 'active' ? 'danger' : 'success'}
                           size="sm"
                           onClick={() => setToggleStatusStudent(s)}
@@ -348,9 +468,23 @@ export const AdminStudentsPage: React.FC = () => {
           description="Khyber Medical University verified academic file"
           maxWidth="md"
           footer={
-            <Button variant="primary" onClick={() => setSelectedStudent(null)} style={{ backgroundColor: '#0f2744' }}>
-              Close Dossier
-            </Button>
+            <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const s = selectedStudent;
+                  setSelectedStudent(null);
+                  handleOpenPasswordModal(s);
+                }}
+                style={{ borderColor: 'var(--color-primary-300)', color: 'var(--color-primary-800)' }}
+              >
+                🔑 Change Password
+              </Button>
+              <Button variant="primary" onClick={() => setSelectedStudent(null)} style={{ backgroundColor: '#0f2744' }}>
+                Close Dossier
+              </Button>
+            </div>
           }
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
@@ -399,16 +533,19 @@ export const AdminStudentsPage: React.FC = () => {
         <Modal
           isOpen={isAddModalOpen || Boolean(editingStudent)}
           onClose={() => {
-            setIsAddModalOpen(false);
-            setEditingStudent(null);
+            if (!isSaving) {
+              setIsAddModalOpen(false);
+              setEditingStudent(null);
+            }
           }}
           title={editingStudent ? 'Edit Candidate Record' : 'Register New Student (KMU Affiliated)'}
-          description="Ensure KMU registration number matches university issuance."
+          description="Updates student profile, father's name, and KMU enrollment in Firebase."
           maxWidth="lg"
           footer={
             <>
               <Button
                 variant="outline"
+                disabled={isSaving}
                 onClick={() => {
                   setIsAddModalOpen(false);
                   setEditingStudent(null);
@@ -416,20 +553,29 @@ export const AdminStudentsPage: React.FC = () => {
               >
                 Cancel
               </Button>
-              <Button variant="primary" onClick={handleSaveStudent} style={{ backgroundColor: '#0f2744' }}>
-                {editingStudent ? 'Save Changes' : 'Register Candidate'}
+              <Button
+                variant="primary"
+                onClick={handleSaveStudent}
+                disabled={isSaving}
+                style={{ backgroundColor: '#0f2744' }}
+              >
+                {isSaving ? 'Saving to Firebase...' : editingStudent ? 'Save Changes' : 'Register Candidate'}
               </Button>
             </>
           }
         >
           <form onSubmit={handleSaveStudent} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem' }}>
+            {saveError && <Alert type="danger">{saveError}</Alert>}
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem' }}>
               <Input
                 label="Full Name"
                 placeholder="e.g. Muhammad Farhan"
                 value={formData.name}
                 onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                 required
+                requiredIndicator
+                disabled={isSaving}
               />
 
               <Input
@@ -438,15 +584,22 @@ export const AdminStudentsPage: React.FC = () => {
                 value={formData.fatherName}
                 onChange={(e) => setFormData({ ...formData, fatherName: e.target.value })}
                 required
+                requiredIndicator
+                disabled={isSaving}
               />
 
-              <Input
-                label="KMU Registration Number"
-                placeholder="2026/KMU-RCNS/001"
-                value={formData.kmuRegistrationNo}
-                onChange={(e) => setFormData({ ...formData, kmuRegistrationNo: e.target.value })}
-                required
-              />
+              {/* KMU Registration Input with fixed /KMU/RCNS/ pre-written */}
+              <div style={{ gridColumn: 'span 2' }}>
+                <KmuRegistrationInput
+                  label="KMU Registration Number"
+                  value={formData.kmuRegistrationNo}
+                  onChange={(val) => setFormData({ ...formData, kmuRegistrationNo: val })}
+                  required
+                  requiredIndicator
+                  disabled={isSaving}
+                  helperText="Format: YYYY/KMU/RCNS/NNN (e.g. 2026/KMU/RCNS/001)"
+                />
+              </div>
 
               <Input
                 label="Email Address"
@@ -455,6 +608,8 @@ export const AdminStudentsPage: React.FC = () => {
                 value={formData.email}
                 onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                 required
+                disabled={Boolean(editingStudent) || isSaving}
+                helperText={editingStudent ? 'Authentication email is tied to candidate account' : undefined}
               />
 
               <Select
@@ -463,6 +618,16 @@ export const AdminStudentsPage: React.FC = () => {
                 value={formData.program}
                 onChange={(e) => setFormData({ ...formData, program: e.target.value })}
                 required
+                disabled={isSaving}
+              />
+
+              <Select
+                label="Batch"
+                options={MOCK_BATCHES.map((b) => ({ value: b, label: b }))}
+                value={formData.batch}
+                onChange={(e) => setFormData({ ...formData, batch: e.target.value })}
+                required
+                disabled={isSaving}
               />
 
               <Select
@@ -471,6 +636,7 @@ export const AdminStudentsPage: React.FC = () => {
                 value={formData.semester}
                 onChange={(e) => setFormData({ ...formData, semester: e.target.value })}
                 required
+                disabled={isSaving}
               />
 
               <Input
@@ -478,6 +644,7 @@ export const AdminStudentsPage: React.FC = () => {
                 placeholder="+92 300 1234567"
                 value={formData.phone}
                 onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                disabled={isSaving}
               />
 
               <Input
@@ -485,7 +652,123 @@ export const AdminStudentsPage: React.FC = () => {
                 placeholder="Saidu Sharif, Swat"
                 value={formData.address}
                 onChange={(e) => setFormData({ ...formData, address: e.target.value })}
+                disabled={isSaving}
               />
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* Change Student Password Modal (Requirement #3) */}
+      {passwordModalStudent && (
+        <Modal
+          isOpen={Boolean(passwordModalStudent)}
+          onClose={() => {
+            if (!isUpdatingPassword) setPasswordModalStudent(null);
+          }}
+          title="Change Student Password"
+          description={`Update authentication login credentials for ${passwordModalStudent.name} (${passwordModalStudent.kmuRegistrationNo})`}
+          maxWidth="md"
+          footer={
+            <>
+              <Button
+                variant="outline"
+                disabled={isUpdatingPassword}
+                onClick={() => setPasswordModalStudent(null)}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                onClick={handleAdminChangePassword}
+                disabled={isUpdatingPassword || !newPassword}
+                style={{ backgroundColor: '#0f2744' }}
+              >
+                {isUpdatingPassword ? 'Updating Password...' : 'Save New Password'}
+              </Button>
+            </>
+          }
+        >
+          <form onSubmit={handleAdminChangePassword} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+            {passwordError && <Alert type="danger">{passwordError}</Alert>}
+            {passwordSuccess && <Alert type="success">{passwordSuccess}</Alert>}
+
+            <div style={{ backgroundColor: '#f8fafc', padding: '0.85rem 1rem', borderRadius: 'var(--radius-md)', border: '1px solid #e2e8f0', fontSize: '0.85rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.35rem' }}>
+                <span style={{ color: 'var(--color-slate-500)' }}>Candidate Name:</span>
+                <span style={{ fontWeight: 700, color: 'var(--color-slate-900)' }}>{passwordModalStudent.name}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.35rem' }}>
+                <span style={{ color: 'var(--color-slate-500)' }}>KMU Registration:</span>
+                <span style={{ fontWeight: 700, color: '#0f2744' }}>{passwordModalStudent.kmuRegistrationNo}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ color: 'var(--color-slate-500)' }}>Account Email:</span>
+                <span style={{ fontWeight: 600, color: 'var(--color-slate-800)' }}>{passwordModalStudent.email || 'N/A'}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.35rem', paddingTop: '0.35rem', borderTop: '1px dashed #e2e8f0' }}>
+                <span style={{ color: 'var(--color-slate-500)' }}>Auth Sync:</span>
+                {passwordModalStudent.passKey ? (
+                  <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#059669', backgroundColor: '#ecfdf5', padding: '0.15rem 0.45rem', borderRadius: '4px', border: '1px solid #a7f3d0' }}>
+                    ✓ Direct Auth Sync Ready
+                  </span>
+                ) : (
+                  <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#d97706', backgroundColor: '#fffbeb', padding: '0.15rem 0.45rem', borderRadius: '4px', border: '1px solid #fde68a' }}>
+                    ⚡ Legacy Profile (Provide current pass or reset link)
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {!passwordModalStudent.passKey && (
+              <Input
+                label="Current / Previous Password (Optional, if known)"
+                type="password"
+                placeholder="e.g. 123456"
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                disabled={isUpdatingPassword}
+                helperText="Providing the candidate's previous password enables immediate update directly in Firebase Authentication on Spark free tier."
+              />
+            )}
+
+            <Input
+              label="New Password"
+              type="password"
+              placeholder="Minimum 6 characters"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              required
+              requiredIndicator
+              disabled={isUpdatingPassword}
+              helperText="Set a new password for this student to access their portal"
+            />
+
+            <Input
+              label="Confirm New Password"
+              type="password"
+              placeholder="Re-type new password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              required
+              requiredIndicator
+              disabled={isUpdatingPassword}
+            />
+
+            <div style={{ paddingTop: '0.75rem', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+              <span style={{ fontSize: '0.8rem', color: 'var(--color-slate-500)' }}>
+                Alternative:
+              </span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={isUpdatingPassword || !passwordModalStudent.email}
+                onClick={handleAdminSendResetEmail}
+                style={{ fontSize: '0.8rem' }}
+              >
+                📧 Send Password Reset Email Link
+              </Button>
             </div>
           </form>
         </Modal>

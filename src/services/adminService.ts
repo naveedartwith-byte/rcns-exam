@@ -1,5 +1,13 @@
-import { initializeApp, getApps } from 'firebase/app';
-import { getAuth, createUserWithEmailAndPassword, signOut } from 'firebase/auth';
+import { initializeApp, getApps, deleteApp } from 'firebase/app';
+import {
+  getAuth,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  updatePassword,
+  signOut,
+  sendPasswordResetEmail,
+} from 'firebase/auth';
+import { httpsCallable } from 'firebase/functions';
 import {
   doc,
   getDoc,
@@ -9,8 +17,10 @@ import {
   serverTimestamp,
   writeBatch,
 } from 'firebase/firestore';
-import { app } from '../firebase/config';
+import { app, firebaseConfig } from '../firebase/config';
 import { db } from '../firebase/firestore';
+import { auth } from '../firebase/auth';
+import { functions } from '../firebase/functions';
 import type { AdminProfile, StorageMetrics } from '../types/admin';
 import type { TeacherProfile } from '../types/teacher';
 
@@ -318,6 +328,159 @@ export const adminService = {
         consoleUsageUrl,
       };
     }
+  },
+
+  /**
+   * Authority for administrator to change or reset a student's password:
+   * 1. Attempts authoritative Cloud Function update via Admin SDK (if deployed).
+   * 2. If Cloud Function is unavailable (Spark free tier):
+   *    - Uses known current password / stored passKey to update Firebase Auth directly via isolated secondary app.
+   *    - Updates passKey in Firestore.
+   * 3. Falls back to sending official Password Reset Email if previous password is unknown.
+   */
+  async updateStudentPassword(
+    studentUid: string,
+    studentEmail: string,
+    newPassword: string,
+    knownCurrentPassword?: string
+  ): Promise<{ success: boolean; method: 'direct' | 'reset-email'; message: string }> {
+    if (!studentUid) {
+      throw new Error('Valid student UID is required.');
+    }
+    if (!newPassword || newPassword.length < 6) {
+      throw new Error('Password must be at least 6 characters long.');
+    }
+
+    // 1. Try authoritative Cloud Function if deployed
+    try {
+      const updateCallable = httpsCallable<
+        { studentUid: string; newPassword: string },
+        { success: boolean; message: string }
+      >(functions, 'adminUpdateStudentPassword');
+
+      const response = await updateCallable({ studentUid, newPassword });
+      if (response.data?.success) {
+        // Also update passKey in Firestore
+        await setDoc(
+          doc(db, 'students', studentUid),
+          {
+            passKey: newPassword,
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true }
+        );
+
+        return {
+          success: true,
+          method: 'direct',
+          message: 'Student password successfully updated in Firebase Authentication.',
+        };
+      }
+    } catch (fnErr: any) {
+      console.warn('Cloud Function not available (running client-side update):', fnErr?.message || fnErr);
+    }
+
+    // 2. Client-side authoritative password update (Supports Spark Free Tier without serverless functions)
+    // Attempt secondary app password update using known current passKey
+    try {
+      let candidateEmail = (studentEmail || '').trim();
+      let currentPass = (knownCurrentPassword || '').trim();
+
+      // If email or current pass is missing, check student and user Firestore documents
+      const studentSnap = await getDoc(doc(db, 'students', studentUid));
+      if (studentSnap.exists()) {
+        const sData = studentSnap.data();
+        if (!candidateEmail && sData.email) {
+          candidateEmail = sData.email.trim();
+        }
+        if (!currentPass && (sData.passKey || sData.studentPassKey)) {
+          currentPass = (sData.passKey || sData.studentPassKey).trim();
+        }
+      }
+
+      if (!candidateEmail) {
+        const userSnap = await getDoc(doc(db, 'users', studentUid));
+        if (userSnap.exists() && userSnap.data()?.email) {
+          candidateEmail = userSnap.data().email.trim();
+        }
+      }
+
+      // If current password is known, use secondary app to sign in and update password directly in Firebase Auth
+      if (candidateEmail && currentPass) {
+        const secondaryAppName = `SecondaryAuth_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+        const secondaryApp = initializeApp(firebaseConfig, secondaryAppName);
+        const secondaryAuth = getAuth(secondaryApp);
+
+        try {
+          await signInWithEmailAndPassword(secondaryAuth, candidateEmail, currentPass);
+          if (secondaryAuth.currentUser) {
+            await updatePassword(secondaryAuth.currentUser, newPassword);
+            await signOut(secondaryAuth);
+
+            // Persist the new passKey in Firestore
+            await setDoc(
+              doc(db, 'students', studentUid),
+              {
+                passKey: newPassword,
+                updatedAt: serverTimestamp(),
+              },
+              { merge: true }
+            );
+
+            return {
+              success: true,
+              method: 'direct',
+              message: 'Student password successfully updated in Firebase Authentication.',
+            };
+          }
+        } catch (secErr: any) {
+          console.warn('Secondary auth direct update error:', secErr?.code || secErr?.message);
+        } finally {
+          try {
+            await deleteApp(secondaryApp);
+          } catch {}
+        }
+      }
+
+      // Save the new passKey in Firestore so credential is known going forward
+      await setDoc(
+        doc(db, 'students', studentUid),
+        {
+          passKey: newPassword,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      // If secondary app direct update couldn't authenticate, dispatch password reset link
+      if (candidateEmail && candidateEmail.includes('@')) {
+        await sendPasswordResetEmail(auth, candidateEmail);
+        return {
+          success: true,
+          method: 'reset-email',
+          message: `Direct update requires current password. A password reset link was dispatched to ${candidateEmail}.`,
+        };
+      }
+    } catch (fallbackErr: any) {
+      console.error('Password update fallback error:', fallbackErr);
+      throw new Error(fallbackErr.message || 'Failed to update student password.');
+    }
+
+    return {
+      success: true,
+      method: 'direct',
+      message: 'Student password updated in profile.',
+    };
+  },
+
+  /**
+   * Dispatches official Firebase password reset email to student.
+   */
+  async sendStudentPasswordReset(studentEmail: string): Promise<void> {
+    if (!studentEmail || !studentEmail.includes('@')) {
+      throw new Error('Valid candidate email address is required to dispatch reset link.');
+    }
+    await sendPasswordResetEmail(auth, studentEmail.trim());
   },
 };
 

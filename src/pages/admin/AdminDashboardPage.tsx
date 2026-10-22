@@ -18,9 +18,12 @@ import {
 } from '../../components/ui';
 import { adminService } from '../../services/adminService';
 import { examService } from '../../services/examService';
+import { resultService } from '../../services/resultService';
+import { calculateCategoryPerformance } from '../../utils/academicAnalytics';
 import { StorageUsageCard } from '../../components/admin/StorageUsageCard';
 import type { AdminDashboardStats, ActivityItem } from '../../types/admin';
 import type { Exam } from '../../types/exam';
+import type { Result } from '../../types/result';
 
 export const AdminDashboardPage: React.FC = () => {
   const navigate = useNavigate();
@@ -34,6 +37,7 @@ export const AdminDashboardPage: React.FC = () => {
     recentActivity: [],
   });
   const [exams, setExams] = useState<Exam[]>([]);
+  const [results, setResults] = useState<Result[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
 
   useEffect(() => {
@@ -41,13 +45,15 @@ export const AdminDashboardPage: React.FC = () => {
     const fetchAdminData = async () => {
       try {
         setLoading(true);
-        const [statsData, examsData] = await Promise.all([
+        const [statsData, examsData, resultsData] = await Promise.all([
           adminService.getAdminDashboardStats(),
           examService.getAllExams(),
+          resultService.getAllResults(),
         ]);
         if (isMounted) {
           setStats(statsData);
           setExams(examsData);
+          setResults(resultsData);
         }
       } catch (err) {
         console.error('Error fetching admin dashboard stats:', err);
@@ -60,6 +66,8 @@ export const AdminDashboardPage: React.FC = () => {
       isMounted = false;
     };
   }, []);
+
+  const categoryStats = calculateCategoryPerformance(results);
 
   // Department enrollment breakdown data
   const departmentBreakdown = [
@@ -154,14 +162,26 @@ export const AdminDashboardPage: React.FC = () => {
         />
 
         <StatCard
-          title="Faculty Members"
-          value={stats.totalTeachers}
-          subtitle="Examiners &amp; Lecturers"
+          title="Class Quiz Overall"
+          value={categoryStats.quizHasData ? `${categoryStats.quizPercentage}%` : '—'}
+          subtitle={categoryStats.quizHasData ? `${categoryStats.quizCount} evaluated quizzes` : 'No quizzes graded'}
+          variant="gold"
+          icon={
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+            </svg>
+          }
+        />
+
+        <StatCard
+          title="Mid-Term Overall"
+          value={categoryStats.midtermHasData ? `${categoryStats.midtermPercentage}%` : '—'}
+          subtitle={categoryStats.midtermHasData ? `${categoryStats.midtermCount} mid-term papers` : 'No mid-term graded'}
           variant="teal"
           icon={
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-              <circle cx="12" cy="7" r="4" />
+              <circle cx="12" cy="12" r="10" />
+              <path d="m9 12 2 2 4-4" />
             </svg>
           }
         />
@@ -181,13 +201,15 @@ export const AdminDashboardPage: React.FC = () => {
 
         <StatCard
           title="Overall Pass Rate"
-          value={`${stats.overallPassRate}%`}
+          value={`${categoryStats.totalCount > 0 ? categoryStats.overallPassRate : stats.overallPassRate}%`}
           subtitle="College Academic Benchmark"
-          variant="gold"
+          variant="slate"
           trend={{ value: 'Target 90% Met', isPositive: true }}
           icon={
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+              <path d="M12 20V10" />
+              <path d="M18 20V4" />
+              <path d="M6 20v-4" />
             </svg>
           }
         />
