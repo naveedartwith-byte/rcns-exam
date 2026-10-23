@@ -19,11 +19,13 @@ import {
 import { adminService } from '../../services/adminService';
 import { examService } from '../../services/examService';
 import { resultService } from '../../services/resultService';
+import { studentService } from '../../services/studentService';
 import { calculateCategoryPerformance } from '../../utils/academicAnalytics';
 import { StorageUsageCard } from '../../components/admin/StorageUsageCard';
 import type { AdminDashboardStats, ActivityItem } from '../../types/admin';
 import type { Exam } from '../../types/exam';
 import type { Result } from '../../types/result';
+import type { StudentProfile } from '../../types/student';
 
 export const AdminDashboardPage: React.FC = () => {
   const navigate = useNavigate();
@@ -38,6 +40,7 @@ export const AdminDashboardPage: React.FC = () => {
   });
   const [exams, setExams] = useState<Exam[]>([]);
   const [results, setResults] = useState<Result[]>([]);
+  const [students, setStudents] = useState<StudentProfile[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
 
   useEffect(() => {
@@ -45,15 +48,20 @@ export const AdminDashboardPage: React.FC = () => {
     const fetchAdminData = async () => {
       try {
         setLoading(true);
-        const [statsData, examsData, resultsData] = await Promise.all([
+        const [statsData, examsData, resultsData, studentsData] = await Promise.all([
           adminService.getAdminDashboardStats(),
           examService.getAllExams(),
           resultService.getAllResults(),
+          studentService.getAllStudents().catch((err) => {
+            console.error('Error fetching students:', err);
+            return [] as StudentProfile[];
+          }),
         ]);
         if (isMounted) {
           setStats(statsData);
           setExams(examsData);
           setResults(resultsData);
+          setStudents(studentsData);
         }
       } catch (err) {
         console.error('Error fetching admin dashboard stats:', err);
@@ -69,12 +77,77 @@ export const AdminDashboardPage: React.FC = () => {
 
   const categoryStats = calculateCategoryPerformance(results);
 
-  // Department enrollment breakdown data
+  // Accurate department enrollment calculation:
+  // All admitted candidates currently enrolled in Generic BSN & Allied Health
+  const totalStudentCount = students.length > 0 ? students.length : stats.totalStudents;
+
+  const bsnStudentsCount = students.length > 0
+    ? students.filter((s) => {
+        const prog = (s.program || '').toLowerCase();
+        const dept = (s.department || '').toLowerCase();
+        return (
+          prog.includes('nurs') ||
+          prog.includes('bsn') ||
+          dept.includes('nurs') ||
+          (!prog.includes('dpt') &&
+            !prog.includes('physical') &&
+            !prog.includes('mlt') &&
+            !prog.includes('laboratory') &&
+            !prog.includes('radiology') &&
+            !prog.includes('imaging'))
+        );
+      }).length
+    : totalStudentCount;
+
+  const bsnPercent = totalStudentCount > 0 ? Math.round((bsnStudentsCount / totalStudentCount) * 100) : (totalStudentCount > 0 ? 100 : 0);
+
+  const dptStudentsCount = students.filter((s) => {
+    const prog = (s.program || '').toLowerCase();
+    const dept = (s.department || '').toLowerCase();
+    return prog.includes('dpt') || dept.includes('physical');
+  }).length;
+
+  const mltStudentsCount = students.filter((s) => {
+    const prog = (s.program || '').toLowerCase();
+    const dept = (s.department || '').toLowerCase();
+    return prog.includes('mlt') || prog.includes('laboratory') || dept.includes('laboratory');
+  }).length;
+
+  const ritStudentsCount = students.filter((s) => {
+    const prog = (s.program || '').toLowerCase();
+    const dept = (s.department || '').toLowerCase();
+    return prog.includes('radiology') || prog.includes('rit') || prog.includes('imaging') || dept.includes('radiology');
+  }).length;
+
   const departmentBreakdown = [
-    { name: 'Nursing & Allied Health Sciences', count: stats.totalStudents > 0 ? Math.round(stats.totalStudents * 0.53) : 185, percent: 53 },
-    { name: 'Physical Therapy & Rehabilitation (DPT)', count: stats.totalStudents > 0 ? Math.round(stats.totalStudents * 0.21) : 72, percent: 21 },
-    { name: 'Medical Laboratory Technology', count: stats.totalStudents > 0 ? Math.round(stats.totalStudents * 0.15) : 54, percent: 15 },
-    { name: 'Radiology & Imaging Technology', count: stats.totalStudents > 0 ? Math.round(stats.totalStudents * 0.11) : 37, percent: 11 },
+    {
+      name: 'Generic BSN & Allied Health Sciences',
+      count: bsnStudentsCount,
+      percent: bsnPercent,
+      hasProgress: true,
+      color: '#0f2744',
+    },
+    {
+      name: 'Physical Therapy & Rehabilitation (DPT)',
+      count: dptStudentsCount,
+      percent: 0,
+      hasProgress: false,
+      color: '#0d9488',
+    },
+    {
+      name: 'Medical Laboratory Technology',
+      count: mltStudentsCount,
+      percent: 0,
+      hasProgress: false,
+      color: '#d97706',
+    },
+    {
+      name: 'Radiology & Imaging Technology',
+      count: ritStudentsCount,
+      percent: 0,
+      hasProgress: false,
+      color: '#6366f1',
+    },
   ];
 
   if (loading) {
@@ -117,13 +190,19 @@ export const AdminDashboardPage: React.FC = () => {
             <span>Master Administration</span>
           </div>
 
-          <h1 style={{ fontSize: '1.85rem', fontWeight: 800, color: '#ffffff', margin: 0, fontFamily: 'var(--font-heading)' }}>
-            Institutional Administration &amp; Examination Controller
+          <h1
+            style={{
+              fontSize: '2.1rem',
+              fontWeight: 800,
+              color: '#ffffff',
+              margin: 0,
+              fontFamily: 'var(--font-heading)',
+              textTransform: 'uppercase',
+              letterSpacing: '0.04em',
+            }}
+          >
+            ADMINISTRATOR
           </h1>
-
-          <p style={{ fontSize: '0.95rem', color: '#e2e8f0', marginTop: '0.4rem', lineHeight: 1.5 }}>
-            Centralized monitoring for <strong>ROYAL COLLEGE OF NURSING SWAT</strong>. Real-time verification of 348 candidates and faculty across 5 departments.
-          </p>
         </div>
 
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
@@ -232,29 +311,42 @@ export const AdminDashboardPage: React.FC = () => {
           </CardHeader>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-            {departmentBreakdown.map((dept, idx) => {
-              const colors = ['#0f2744', '#0d9488', '#d97706', '#6366f1'];
-              const currentColor = colors[idx % colors.length];
-
+            {departmentBreakdown.map((dept) => {
               return (
-                <div key={dept.name}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '0.35rem' }}>
+                <div key={dept.name} style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.85rem' }}>
                     <span style={{ fontWeight: 600, color: 'var(--color-slate-800)' }}>{dept.name}</span>
-                    <span style={{ color: 'var(--color-slate-600)', fontWeight: 700 }}>
-                      {dept.count} Students ({dept.percent}%)
+                    <span
+                      style={{
+                        color: dept.hasProgress ? 'var(--color-slate-700)' : 'var(--color-slate-400)',
+                        fontWeight: 700,
+                      }}
+                    >
+                      {dept.count} Students {dept.hasProgress ? `(${dept.percent}%)` : ''}
                     </span>
                   </div>
 
-                  <div style={{ width: '100%', height: '8px', backgroundColor: 'var(--color-slate-100)', borderRadius: 'var(--radius-full)', overflow: 'hidden' }}>
+                  {dept.hasProgress && (
                     <div
                       style={{
-                        width: `${dept.percent}%`,
-                        height: '100%',
-                        backgroundColor: currentColor,
+                        width: '100%',
+                        height: '8px',
+                        backgroundColor: 'var(--color-slate-100)',
                         borderRadius: 'var(--radius-full)',
+                        overflow: 'hidden',
                       }}
-                    />
-                  </div>
+                    >
+                      <div
+                        style={{
+                          width: `${dept.percent}%`,
+                          height: '100%',
+                          backgroundColor: dept.color,
+                          borderRadius: 'var(--radius-full)',
+                          transition: 'width 0.4s ease',
+                        }}
+                      />
+                    </div>
+                  )}
                 </div>
               );
             })}
