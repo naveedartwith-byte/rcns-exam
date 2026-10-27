@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types src/tests/phase4Verification.ts && node --experimental-strip-types src/tests/secureArchitectureVerification.ts && node --experimental-strip-types src/tests/sparkFreeTierVerification.ts && node --experimental-strip-types src/tests/gradingRegressionVerification.ts && node --experimental-strip-types src/tests/writtenQuestionsRegressionVerification.ts && node --experimental-strip-types src/tests/assignmentPermissionVerification.ts && node --experimental-strip-types src/tests/immediateSubmissionVerification.ts && node --experimental-strip-types src/tests/secretExamCodeVerification.ts && node --experimental-strip-types src/tests/cleanupSafetyVerification.ts",
+    "test": "node --experimental-strip-types src/tests/phase4Verification.ts && node --experimental-strip-types src/tests/secureArchitectureVerification.ts && node --experimental-strip-types src/tests/sparkFreeTierVerification.ts && node --experimental-strip-types src/tests/gradingRegressionVerification.ts && node --experimental-strip-types src/tests/writtenQuestionsRegressionVerification.ts && node --experimental-strip-types src/tests/assignmentPermissionVerification.ts && node --experimental-strip-types src/tests/immediateSubmissionVerification.ts && node --experimental-strip-types src/tests/secretExamCodeVerification.ts && node --experimental-strip-types src/tests/cleanupSafetyVerification.ts && node --experimental-strip-types src/tests/masterImprovementVerification.ts",
     "cleanup:dry-run": "node scripts/firebaseCleanup.mjs",
     "cleanup:execute": "node scripts/firebaseCleanup.mjs --execute",
     "build:functions": "npm --prefix functions run build"
@@ -17,7 +17,8 @@
     "firebase": "^11.4.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "react-router-dom": "^7.3.0"
+    "react-router-dom": "^7.3.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/node": "^22.13.9",

@@ -299,3 +299,177 @@ input, select, textarea {
     overflow: hidden !important;
   }
 }
+
+/* ==========================================================================
+   OFFICIAL A4 PRINT STYLESHEET - ROYAL COLLEGE OF NURSING SWAT
+   ========================================================================== */
+@page {
+  size: A4 portrait;
+  margin: 10mm 10mm 12mm 10mm;
+}
+
+@page landscape-mode {
+  size: A4 landscape;
+  margin: 10mm;
+}
+
+@media print {
+  /* Hide application shell UI */
+  header,
+  nav,
+  aside,
+  footer,
+  .no-print,
+  button:not(.allow-print),
+  .btn,
+  .filter-controls,
+  .search-container,
+  [role="dialog"] button,
+  .tabs-container {
+    display: none !important;
+  }
+
+  body, html {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    font-size: 8.5pt !important;
+    line-height: 1.25 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+    overflow: visible !important;
+  }
+
+  .page-container,
+  main,
+  #root {
+    margin: 0 !important;
+    padding: 0 !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    border: none !important;
+    background: #ffffff !important;
+    box-shadow: none !important;
+    overflow: visible !important;
+  }
+
+  /* Force display and strict 100% width of printable reports without scrollbars */
+  .a4-print-sheet {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 auto !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    box-shadow: none !important;
+    border: none !important;
+    overflow: visible !important;
+    box-sizing: border-box !important;
+  }
+
+  .a4-print-sheet div,
+  .a4-print-sheet .card,
+  .a4-print-sheet [style*="overflow"] {
+    overflow: visible !important;
+    overflow-x: visible !important;
+    max-width: 100% !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+    border-color: #cbd5e1 !important;
+  }
+
+  .a4-landscape-page {
+    page: landscape-mode;
+  }
+
+  /* Auto-fitting Table rules for print (avoids horizontal cut-off on portrait/landscape) */
+  table {
+    width: 100% !important;
+    max-width: 100% !important;
+    border-collapse: collapse !important;
+  }
+
+  .a4-print-sheet table,
+  .class-results-table {
+    width: 100% !important;
+    max-width: 100% !important;
+    table-layout: fixed !important;
+    border-collapse: collapse !important;
+    font-size: 7.2pt !important;
+    line-height: 1.15 !important;
+  }
+
+  .a4-print-sheet th,
+  .class-results-table th {
+    padding: 3px 2px !important;
+    font-size: 6.8pt !important;
+    font-weight: 700 !important;
+    text-align: center !important;
+    vertical-align: middle !important;
+    word-wrap: break-word !important;
+    word-break: break-word !important;
+    overflow-wrap: break-word !important;
+    white-space: normal !important;
+    box-sizing: border-box !important;
+    border: 1px solid #94a3b8 !important;
+    background-color: #0f2744 !important;
+    color: #ffffff !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  .a4-print-sheet td,
+  .class-results-table td {
+    padding: 3px 2px !important;
+    font-size: 7.2pt !important;
+    word-wrap: break-word !important;
+    word-break: break-word !important;
+    overflow-wrap: break-word !important;
+    white-space: normal !important;
+    box-sizing: border-box !important;
+    border: 1px solid #cbd5e1 !important;
+  }
+
+  /* Proportional Column Widths for Class Result Master Sheet (Total: 100%) */
+  .class-results-table th:nth-child(1), .class-results-table td:nth-child(1) { width: 4% !important; text-align: center !important; }
+  .class-results-table th:nth-child(2), .class-results-table td:nth-child(2) { width: 14% !important; text-align: left !important; font-family: monospace !important; font-weight: 700 !important; }
+  .class-results-table th:nth-child(3), .class-results-table td:nth-child(3) { width: 14% !important; text-align: left !important; font-weight: 600 !important; }
+  .class-results-table th:nth-child(4), .class-results-table td:nth-child(4) { width: 13% !important; text-align: left !important; }
+  .class-results-table th:nth-child(5), .class-results-table td:nth-child(5) { width: 7% !important; text-align: center !important; }
+  .class-results-table th:nth-child(6), .class-results-table td:nth-child(6) { width: 6% !important; text-align: center !important; color: #059669 !important; font-weight: 700 !important; }
+  .class-results-table th:nth-child(7), .class-results-table td:nth-child(7) { width: 6% !important; text-align: center !important; color: #dc2626 !important; font-weight: 700 !important; }
+  .class-results-table th:nth-child(8), .class-results-table td:nth-child(8) { width: 7% !important; text-align: center !important; }
+  .class-results-table th:nth-child(9), .class-results-table td:nth-child(9) { width: 8% !important; text-align: center !important; font-weight: 700 !important; }
+  .class-results-table th:nth-child(10), .class-results-table td:nth-child(10) { width: 6% !important; text-align: center !important; font-weight: 700 !important; }
+  .class-results-table th:nth-child(11), .class-results-table td:nth-child(11) { width: 7% !important; text-align: center !important; font-weight: 700 !important; }
+  .class-results-table th:nth-child(12), .class-results-table td:nth-child(12) { width: 8% !important; text-align: center !important; font-weight: 700 !important; }
+
+  /* Compact Badges in Print */
+  .a4-print-sheet .badge,
+  .class-results-table span {
+    padding: 1px 3px !important;
+    font-size: 6.8pt !important;
+    display: inline-block !important;
+    border: none !important;
+  }
+
+  thead {
+    display: table-header-group !important;
+  }
+
+  tfoot {
+    display: table-footer-group !important;
+  }
+
+  tr, .print-card, .metric-box, .wrong-mcq-box {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  /* Accurate color rendering for badges and headers */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+}

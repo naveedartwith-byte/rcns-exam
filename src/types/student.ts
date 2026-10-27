@@ -14,6 +14,7 @@ export interface StudentProfile {
   department: string;
   phone?: string;
   address?: string;
+  /** @deprecated Fabricated feature removed. Kept optional for legacy schema compatibility */
   gpa?: number;
   status?: 'active' | 'suspended' | 'inactive';
   passKey?: string;

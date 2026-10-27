@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { doc, onSnapshot } from 'firebase/firestore';
+import { db } from '../../firebase/firestore';
 import {
   SearchBar,
   Select,
@@ -81,6 +83,10 @@ export const StudentExamsPage: React.FC = () => {
   // Secret Exam Code State
   const [codeModalExam, setCodeModalExam] = useState<Exam | null>(null);
   const [isCodeModalOpen, setIsCodeModalOpen] = useState(false);
+
+  // Exam Lock State (Teacher-Controlled Invigilator Lock for Misbehavior)
+  const [isExamLocked, setIsExamLocked] = useState(false);
+  const [examLockReason, setExamLockReason] = useState<string | null>(null);
 
   // Fullscreen toggler
   const toggleFullscreen = () => {
@@ -229,7 +235,7 @@ export const StudentExamsPage: React.FC = () => {
 
   // Real-time Candidate Heartbeat: Enables Teacher Proctoring & Syncs In-Progress Answers
   useEffect(() => {
-    if (!takingExam || examSubmitted || !currentUser) return;
+    if (!takingExam || examSubmitted || !currentUser || isExamLocked) return;
 
     const answeredCount = Object.keys(selectedAnswers).length;
 
@@ -297,6 +303,7 @@ export const StudentExamsPage: React.FC = () => {
     activeExamSection,
     flaggedQuestions,
     tabSwitchCount,
+    isExamLocked,
   ]);
 
   // Load authorized exams
@@ -384,6 +391,36 @@ export const StudentExamsPage: React.FC = () => {
     };
   }, [takingExam?.id, examSubmitted, isSubmitting, timeLeftSeconds > 0]);
 
+  // Real-time Invigilator Lock Listener (Feature 3: Teacher-Controlled Exam Lock for Misbehavior)
+  useEffect(() => {
+    if (!takingExam || examSubmitted || !currentUser) return;
+    const assignmentId = `${takingExam.id}_${currentUser.uid}`;
+    const assignRef = doc(db, 'assignments', assignmentId);
+
+    const unsubscribe = onSnapshot(
+      assignRef,
+      (docSnap) => {
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          if (data.isLocked === true) {
+            setIsExamLocked(true);
+            setExamLockReason(data.lockReason || 'Suspected academic irregularity or invigilator discretion');
+          } else {
+            setIsExamLocked(false);
+            setExamLockReason(null);
+          }
+        }
+      },
+      (error) => {
+        console.warn('Real-time assignment lock subscription note:', error);
+      }
+    );
+
+    return () => {
+      unsubscribe();
+    };
+  }, [takingExam?.id, examSubmitted, currentUser]);
+
   const handleStartExam = async (exam: Exam) => {
     // 1. Perform canonical student exam eligibility check & diagnostics
     const eligibility = checkStudentExamEligibility({
@@ -465,6 +502,8 @@ export const StudentExamsPage: React.FC = () => {
     let savedFlags: Record<number, boolean> = {};
     let savedSwitches = 0;
     let isResumed = false;
+    let isLockedAttempt = false;
+    let initialLockReason: string | null = null;
 
     if (activeUid) {
       // Step A: Inspect localStorage for latest in-memory draft
@@ -538,6 +577,10 @@ export const StudentExamsPage: React.FC = () => {
           if (assign.tabSwitchCount !== undefined) {
             savedSwitches = Math.max(savedSwitches, Number(assign.tabSwitchCount) || 0);
           }
+          if (assign.isLocked === true) {
+            isLockedAttempt = true;
+            initialLockReason = assign.lockReason || 'Suspected academic irregularity or invigilator discretion';
+          }
         }
       } catch (checkErr) {
         console.warn('Could not inspect candidate assignment record:', checkErr);
@@ -545,6 +588,8 @@ export const StudentExamsPage: React.FC = () => {
     }
 
     setTakingExam(exam);
+    setIsExamLocked(isLockedAttempt);
+    setExamLockReason(initialLockReason);
     setCurrentQuestionIndex(savedIndex);
     setSelectedAnswers(savedAnswers);
     selectedAnswersRef.current = savedAnswers;
@@ -626,6 +671,7 @@ export const StudentExamsPage: React.FC = () => {
   };
 
   const handleSelectOption = (optIndex: number) => {
+    if (isExamLocked) return;
     setSelectedAnswers((prev) => {
       const updated = {
         ...prev,
@@ -649,6 +695,7 @@ export const StudentExamsPage: React.FC = () => {
   };
 
   const handleToggleFlag = () => {
+    if (isExamLocked) return;
     setFlaggedQuestions((prev) => {
       const updated = {
         ...prev,
@@ -670,6 +717,7 @@ export const StudentExamsPage: React.FC = () => {
   };
 
   const handleClearAnswer = () => {
+    if (isExamLocked) return;
     setSelectedAnswers((prev) => {
       const copy = { ...prev };
       delete copy[currentQuestionIndex];
@@ -695,6 +743,7 @@ export const StudentExamsPage: React.FC = () => {
     questionText: string,
     text: string
   ) => {
+    if (isExamLocked) return;
     setWrittenAnswers((prev) => {
       const updated = {
         ...prev,
@@ -952,6 +1001,7 @@ export const StudentExamsPage: React.FC = () => {
 
   // Handler to open confirm dialog or block with incomplete alert
   const handleAttemptSubmit = () => {
+    if (isExamLocked) return;
     if (examQuestions.length > 0 && !allMcqsCompleted) {
       setShowIncompleteAlert(true);
       return;
@@ -1207,6 +1257,106 @@ export const StudentExamsPage: React.FC = () => {
             overflow: 'hidden',
           }}
         >
+          {/* Invigilator Locked Overlay (Feature 3: Teacher-Controlled Exam Lock for Misbehavior) */}
+          {isExamLocked && (
+            <div
+              style={{
+                position: 'fixed',
+                inset: 0,
+                backgroundColor: 'rgba(15, 23, 42, 0.94)',
+                backdropFilter: 'blur(8px)',
+                zIndex: 100000,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '1.5rem',
+              }}
+            >
+              <div
+                style={{
+                  maxWidth: '560px',
+                  width: '100%',
+                  backgroundColor: '#ffffff',
+                  borderRadius: '1rem',
+                  padding: '2.25rem 2rem',
+                  boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
+                  textAlign: 'center',
+                  border: '2px solid #ef4444',
+                }}
+              >
+                <div
+                  style={{
+                    width: '64px',
+                    height: '64px',
+                    borderRadius: '50%',
+                    backgroundColor: '#fee2e2',
+                    color: '#dc2626',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    margin: '0 auto 1.25rem',
+                  }}
+                >
+                  <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                  </svg>
+                </div>
+
+                <div style={{ fontSize: '0.8rem', fontWeight: 800, color: '#0f2744', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.35rem' }}>
+                  ROYAL COLLEGE OF NURSING SWAT • EXAMINATION SECURITY
+                </div>
+
+                <h2 style={{ fontSize: '1.35rem', fontWeight: 800, color: '#1e293b', margin: '0 0 0.75rem', lineHeight: 1.35 }}>
+                  Your examination has been temporarily locked by the invigilator. Please contact your teacher.
+                </h2>
+
+                {examLockReason && (
+                  <div
+                    style={{
+                      padding: '0.75rem 1rem',
+                      backgroundColor: '#fef2f2',
+                      borderRadius: '0.5rem',
+                      border: '1px solid #fecaca',
+                      color: '#991b1b',
+                      fontSize: '0.875rem',
+                      fontWeight: 600,
+                      marginBottom: '1rem',
+                      textAlign: 'left',
+                    }}
+                  >
+                    <span style={{ textTransform: 'uppercase', fontSize: '0.72rem', display: 'block', color: '#b91c1c', fontWeight: 700 }}>
+                      Invigilator Stated Reason:
+                    </span>
+                    {examLockReason}
+                  </div>
+                )}
+
+                <div
+                  style={{
+                    backgroundColor: '#f8fafc',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '0.5rem',
+                    padding: '0.85rem 1rem',
+                    marginBottom: '1.25rem',
+                    fontSize: '0.85rem',
+                    color: '#475569',
+                    lineHeight: 1.5,
+                  }}
+                >
+                  <div style={{ fontWeight: 700, color: '#dc2626', marginBottom: '0.25rem' }}>
+                    ⏱ Official Examination Timer Continues: {formatTimer(timeLeftSeconds)} remaining
+                  </div>
+                  All previously selected answers are securely recorded and preserved. Answering questions, changing answers, and flagging are disabled while this lock is active.
+                </div>
+
+                <div style={{ fontSize: '0.78rem', color: '#64748b', fontStyle: 'italic' }}>
+                  Do not refresh or close the browser. Once authorized by your teacher, your examination session and remaining time will be immediately restored.
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Top Examination Proctoring Bar */}
           <div
             className="rcns-exam-proctor-header"
@@ -1290,39 +1440,28 @@ export const StudentExamsPage: React.FC = () => {
                 <span>{formatTimer(timeLeftSeconds)}</span>
               </div>
 
-              {/* FINISH & SUBMIT BUTTON IN HEADER: ALWAYS VISIBLE ON ALL SCREENS & SECTIONS */}
-              <button
-                type="button"
-                onClick={handleAttemptSubmit}
-                disabled={isSubmitting}
+              {/* Question Completion Progress Indicator */}
+              <div
                 style={{
-                  backgroundColor: '#dc2626',
-                  color: '#ffffff',
-                  border: 'none',
-                  padding: '0.35rem 0.75rem',
+                  backgroundColor: allMcqsCompleted ? '#ecfdf5' : '#f8fafc',
+                  border: `1px solid ${allMcqsCompleted ? '#a7f3d0' : '#e2e8f0'}`,
+                  color: allMcqsCompleted ? '#065f46' : '#475569',
+                  padding: '0.35rem 0.65rem',
                   borderRadius: 'var(--radius-sm)',
                   fontWeight: 700,
                   fontSize: '0.78rem',
-                  cursor: isSubmitting ? 'not-allowed' : 'pointer',
                   display: 'flex',
                   alignItems: 'center',
                   gap: '0.35rem',
-                  boxShadow: '0 1px 2px rgba(0, 0, 0, 0.2)',
-                  transition: 'background-color 0.15s ease',
                   flexShrink: 0,
                 }}
-                title={
-                  allMcqsCompleted
-                    ? 'Submit your completed exam paper'
-                    : `All questions must be answered before submission (${answeredCount}/${totalQuestions} completed)`
-                }
               >
-                {isSubmitting
-                  ? 'Submitting...'
-                  : allMcqsCompleted
-                  ? '✓ Submit Exam'
-                  : `✓ Submit (${answeredCount}/${totalQuestions})`}
-              </button>
+                {allMcqsCompleted ? (
+                  <span>✓ All MCQs Completed</span>
+                ) : (
+                  <span>MCQs: {answeredCount}/{totalQuestions}</span>
+                )}
+              </div>
 
               {/* Mobile Palette Toggle Button */}
               <button
@@ -1887,20 +2026,18 @@ export const StudentExamsPage: React.FC = () => {
                               Go to Written Section →
                             </Button>
                           )}
-                          <Button
-                            variant="danger"
-                            size="sm"
-                            onClick={handleAttemptSubmit}
-                            disabled={isSubmitting}
-                            style={{ fontWeight: 700 }}
-                            title={
-                              allMcqsCompleted
-                                ? 'Submit your completed exam paper'
-                                : `All questions must be answered before submission (${answeredCount}/${totalQuestions} completed)`
-                            }
-                          >
-                            {allMcqsCompleted ? '✓ Submit Exam' : `✓ Submit Exam (${answeredCount}/${totalQuestions})`}
-                          </Button>
+                          {allMcqsCompleted && (
+                            <Button
+                              variant="danger"
+                              size="sm"
+                              onClick={handleAttemptSubmit}
+                              disabled={isSubmitting}
+                              style={{ fontWeight: 800, backgroundColor: '#dc2626', borderColor: '#b91c1c' }}
+                              title="Submit your completed exam paper"
+                            >
+                              {isSubmitting ? 'Submitting...' : '✓ Submit Exam'}
+                            </Button>
+                          )}
                         </div>
 
                         <div style={{ display: 'flex', gap: '0.4rem' }}>
@@ -2031,26 +2168,24 @@ export const StudentExamsPage: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Finish & Submit Button: ONLY official way to exit (Requirement #4) */}
-                  <div style={{ marginTop: '0.75rem', flexShrink: 0 }}>
-                    <Button
-                      variant="danger"
-                      fullWidth
-                      size="sm"
-                      onClick={() => {
-                        console.log('[StudentExamsPage] MCQ palette Submit Exam button clicked');
-                        handleAttemptSubmit();
-                      }}
-                      disabled={isSubmitting}
-                      style={{ fontWeight: 700 }}
-                    >
-                      {isSubmitting
-                        ? 'Submitting...'
-                        : allMcqsCompleted
-                        ? 'Finish & Submit Entire Exam'
-                        : `Finish & Submit (${answeredCount}/${totalQuestions})`}
-                    </Button>
-                  </div>
+                  {/* Submit Exam Button: ONLY rendered once all MCQs are attempted */}
+                  {allMcqsCompleted && (
+                    <div style={{ marginTop: '0.75rem', flexShrink: 0 }}>
+                      <Button
+                        variant="danger"
+                        fullWidth
+                        size="sm"
+                        onClick={() => {
+                          console.log('[StudentExamsPage] MCQ palette Submit Exam button clicked');
+                          handleAttemptSubmit();
+                        }}
+                        disabled={isSubmitting}
+                        style={{ fontWeight: 800, backgroundColor: '#059669', borderColor: '#047857' }}
+                      >
+                        {isSubmitting ? 'Submitting...' : '✓ Submit Exam'}
+                      </Button>
+                    </div>
+                  )}
                 </div>
               </div>
             )}

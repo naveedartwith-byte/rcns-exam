@@ -236,7 +236,7 @@ export const TeacherDashboardPage: React.FC = () => {
             </div>
             <div>
               <div style={{ fontWeight: 700, color: 'var(--color-slate-900)' }}>Candidate Directory</div>
-              <div style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)' }}>View KMU reg records &amp; GPAs</div>
+              <div style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)' }}>View KMU reg records &amp; profiles</div>
             </div>
           </Card>
         </div>

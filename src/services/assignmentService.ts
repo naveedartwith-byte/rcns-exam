@@ -11,7 +11,7 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import { db } from '../firebase/firestore';
-import type { Assignment, AssignmentStatus } from '../types/assignment';
+import type { Assignment, AssignmentStatus, ExamLockAuditEntry } from '../types/assignment';
 import type { Exam } from '../types/exam';
 import { getEffectiveExamStatus, parseDateToMillis } from '../utils/dateTime';
 
@@ -470,6 +470,176 @@ export const assignmentService = {
       return snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Assignment));
     } catch (err) {
       console.error('Error fetching exam candidate roster:', err);
+      return [];
+    }
+  },
+
+  /**
+   * Locks an active student exam attempt due to misbehavior, suspected cheating, or unauthorized action.
+   * - Validates teacher/admin authorization.
+   * - Enforces that finalized/submitted attempts cannot be locked.
+   * - Preserves previously saved student answers.
+   * - Records actor identity, timestamp, attempt, student, and reason in both assignment and audit collection.
+   */
+  async lockStudentExamAttempt(params: {
+    examId: string;
+    studentId: string;
+    actorId: string;
+    actorName: string;
+    actorRole: 'teacher' | 'admin';
+    reason: string;
+  }): Promise<{ success: boolean; message: string }> {
+    const { examId, studentId, actorId, actorName, actorRole, reason } = params;
+    if (!examId || !studentId) {
+      throw new Error('Exam ID and Student ID are required to lock attempt.');
+    }
+    if (!reason || !reason.trim()) {
+      throw new Error('A valid reason is required to lock student examination.');
+    }
+
+    const assignmentId = `${examId}_${studentId}`;
+    const assignRef = doc(db, 'assignments', assignmentId);
+    const assignSnap = await getDoc(assignRef);
+
+    if (!assignSnap.exists()) {
+      throw new Error('Assignment attempt record not found.');
+    }
+
+    const assignData = assignSnap.data() as Assignment;
+
+    // Disallow locking finalized/submitted attempts
+    if (assignData.status === 'submitted' || assignData.status === 'graded') {
+      throw new Error('Cannot lock a finalized or submitted examination attempt.');
+    }
+
+    const timestamp = new Date().toISOString();
+    const auditEntry: ExamLockAuditEntry = {
+      action: 'lock',
+      timestamp,
+      actorId,
+      actorName: actorName || 'Authorized Invigilator',
+      actorRole,
+      reason: reason.trim(),
+      examId,
+      studentId,
+      studentName: assignData.studentName || 'Student Candidate',
+      kmuRegistrationNo: assignData.kmuRegistrationNo,
+    };
+
+    const currentAuditTrail = Array.isArray(assignData.lockAuditTrail) ? assignData.lockAuditTrail : [];
+    const updatedAuditTrail = [...currentAuditTrail, auditEntry];
+
+    // Update assignment record preserving answers and attempt state
+    await updateDoc(assignRef, {
+      isLocked: true,
+      lockedAt: timestamp,
+      lockedBy: actorId,
+      lockedByName: actorName || 'Authorized Invigilator',
+      lockedByRole: actorRole,
+      lockReason: reason.trim(),
+      lockAuditTrail: updatedAuditTrail,
+    });
+
+    // Write persistent audit trail to /examLockAudits
+    try {
+      const auditCol = collection(db, 'examLockAudits');
+      await setDoc(doc(auditCol, `${assignmentId}_${Date.now()}`), {
+        ...auditEntry,
+        createdAt: serverTimestamp(),
+      });
+    } catch (auditErr) {
+      console.warn('Persistent exam lock audit write notice:', auditErr);
+    }
+
+    return {
+      success: true,
+      message: `Exam attempt for ${assignData.studentName || studentId} has been securely locked.`,
+    };
+  },
+
+  /**
+   * Unlocks a previously locked student exam attempt.
+   * Restores student's active exam session and remaining time without modifying previously saved answers.
+   */
+  async unlockStudentExamAttempt(params: {
+    examId: string;
+    studentId: string;
+    actorId: string;
+    actorName: string;
+    actorRole: 'teacher' | 'admin';
+    reason?: string;
+  }): Promise<{ success: boolean; message: string }> {
+    const { examId, studentId, actorId, actorName, actorRole, reason } = params;
+    const assignmentId = `${examId}_${studentId}`;
+    const assignRef = doc(db, 'assignments', assignmentId);
+    const assignSnap = await getDoc(assignRef);
+
+    if (!assignSnap.exists()) {
+      throw new Error('Assignment attempt record not found.');
+    }
+
+    const assignData = assignSnap.data() as Assignment;
+    const timestamp = new Date().toISOString();
+    const auditEntry: ExamLockAuditEntry = {
+      action: 'unlock',
+      timestamp,
+      actorId,
+      actorName: actorName || 'Authorized Invigilator',
+      actorRole,
+      reason: (reason || 'Invigilator authorization restored').trim(),
+      examId,
+      studentId,
+      studentName: assignData.studentName || 'Student Candidate',
+      kmuRegistrationNo: assignData.kmuRegistrationNo,
+    };
+
+    const currentAuditTrail = Array.isArray(assignData.lockAuditTrail) ? assignData.lockAuditTrail : [];
+    const updatedAuditTrail = [...currentAuditTrail, auditEntry];
+
+    await updateDoc(assignRef, {
+      isLocked: false,
+      lockedAt: null,
+      lockedBy: null,
+      lockedByName: null,
+      lockedByRole: null,
+      lockReason: null,
+      lockAuditTrail: updatedAuditTrail,
+    });
+
+    try {
+      const auditCol = collection(db, 'examLockAudits');
+      await setDoc(doc(auditCol, `${assignmentId}_${Date.now()}`), {
+        ...auditEntry,
+        createdAt: serverTimestamp(),
+      });
+    } catch (auditErr) {
+      console.warn('Persistent exam unlock audit write notice:', auditErr);
+    }
+
+    return {
+      success: true,
+      message: `Exam attempt for ${assignData.studentName || studentId} has been unlocked. Candidate may resume.`,
+    };
+  },
+
+  /**
+   * Fetches lock audit trail across an exam or college-wide (Admin/Teacher view).
+   */
+  async getExamLockAudits(examId?: string): Promise<ExamLockAuditEntry[]> {
+    try {
+      const auditCol = collection(db, 'examLockAudits');
+      let snap;
+      if (examId) {
+        const q = query(auditCol, where('examId', '==', examId));
+        snap = await getDocs(q);
+      } else {
+        snap = await getDocs(auditCol);
+      }
+      return snap.docs
+        .map((d) => ({ id: d.id, ...d.data() } as ExamLockAuditEntry))
+        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    } catch (err) {
+      console.warn('Could not query examLockAudits:', err);
       return [];
     }
   },

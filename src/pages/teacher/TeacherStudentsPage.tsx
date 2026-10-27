@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   SearchBar,
   Select,
@@ -17,7 +17,7 @@ import {
   EmptyState,
   LoadingSpinner,
 } from '../../components/ui';
-import { MOCK_PROGRAMS, MOCK_SEMESTERS } from '../../mock/mockData';
+import { MOCK_PROGRAMS, MOCK_SEMESTERS, MOCK_BATCHES } from '../../mock/mockData';
 import { studentService } from '../../services/studentService';
 import { resultService } from '../../services/resultService';
 import { calculateCategoryPerformance } from '../../utils/academicAnalytics';
@@ -29,8 +29,9 @@ export const TeacherStudentsPage: React.FC = () => {
   const [results, setResults] = useState<Result[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const [batchFilter, setBatchFilter] = useState('Batch 15th');
+  const [semesterFilter, setSemesterFilter] = useState('Semester 1');
   const [programFilter, setProgramFilter] = useState('all');
-  const [semesterFilter, setSemesterFilter] = useState('all');
 
   const [selectedStudent, setSelectedStudent] = useState<StudentProfile | null>(null);
   const [viewingResultsStudent, setViewingResultsStudent] = useState<StudentProfile | null>(null);
@@ -60,13 +61,29 @@ export const TeacherStudentsPage: React.FC = () => {
     };
   }, []);
 
+  const availableBatches = useMemo(() => {
+    const list = [...MOCK_BATCHES];
+    students.forEach((s) => {
+      if (s.batch && s.batch.trim() && !list.includes(s.batch.trim())) {
+        list.push(s.batch.trim());
+      }
+    });
+    return list;
+  }, [students]);
+
+  // Strictly filter candidates so teacher ONLY sees students of the selected Batch and Semester
   const filteredStudents = students.filter((s) => {
+    if (batchFilter && batchFilter !== 'all') {
+      if ((s.batch || '').trim().toLowerCase() !== batchFilter.trim().toLowerCase()) return false;
+    }
+    if (semesterFilter && semesterFilter !== 'all') {
+      if ((s.semester || '').trim().toLowerCase() !== semesterFilter.trim().toLowerCase()) return false;
+    }
     if (programFilter !== 'all' && s.program !== programFilter) return false;
-    if (semesterFilter !== 'all' && s.semester !== semesterFilter) return false;
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
-      const matchName = s.name.toLowerCase().includes(q);
-      const matchKmu = s.kmuRegistrationNo.toLowerCase().includes(q);
+      const matchName = (s.name || '').toLowerCase().includes(q);
+      const matchKmu = (s.kmuRegistrationNo || '').toLowerCase().includes(q);
       if (!matchName && !matchKmu) return false;
     }
     return true;
@@ -98,6 +115,31 @@ export const TeacherStudentsPage: React.FC = () => {
           />
 
           <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            {/* Batch Filter - FIRST */}
+            <div style={{ minWidth: '150px' }}>
+              <Select
+                options={[
+                  { value: 'all', label: 'All Batches' },
+                  ...availableBatches.map((b) => ({ value: b, label: b })),
+                ]}
+                value={batchFilter}
+                onChange={(e) => setBatchFilter(e.target.value)}
+              />
+            </div>
+
+            {/* Semester Filter - SECOND */}
+            <div style={{ minWidth: '150px' }}>
+              <Select
+                options={[
+                  { value: 'all', label: 'All Semesters' },
+                  ...MOCK_SEMESTERS.map((s) => ({ value: s, label: s })),
+                ]}
+                value={semesterFilter}
+                onChange={(e) => setSemesterFilter(e.target.value)}
+              />
+            </div>
+
+            {/* Academic Program Filter - THIRD */}
             <div style={{ minWidth: '180px' }}>
               <Select
                 options={[{ value: 'all', label: 'All Programs' }, ...MOCK_PROGRAMS.map((p) => ({ value: p.name, label: p.name }))]}
@@ -105,30 +147,34 @@ export const TeacherStudentsPage: React.FC = () => {
                 onChange={(e) => setProgramFilter(e.target.value)}
               />
             </div>
-
-            <div style={{ minWidth: '150px' }}>
-              <Select
-                options={[{ value: 'all', label: 'All Semesters' }, ...MOCK_SEMESTERS.map((s) => ({ value: s, label: s }))]}
-                value={semesterFilter}
-                onChange={(e) => setSemesterFilter(e.target.value)}
-              />
-            </div>
           </div>
         </div>
       </Card>
+
+      {/* Cohort Indicator Banner */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0.75rem', backgroundColor: '#f8fafc', borderRadius: 'var(--radius-sm)', border: '1px solid #e2e8f0' }}>
+        <div style={{ fontSize: '0.85rem', color: '#1e293b', fontWeight: 600 }}>
+          <span>Active Cohort: </span>
+          <strong style={{ color: '#0f2744' }}>{batchFilter === 'all' ? 'All Batches' : batchFilter}</strong>
+          <span> • </span>
+          <strong style={{ color: '#059669' }}>{semesterFilter === 'all' ? 'All Semesters' : semesterFilter}</strong>
+        </div>
+        <Badge variant="primary">{filteredStudents.length} Candidates</Badge>
+      </div>
 
       {/* Student Table */}
       {loading ? (
         <LoadingSpinner text="Loading candidate roster..." />
       ) : filteredStudents.length === 0 ? (
         <EmptyState
-          title="No Students Found"
-          description="Try broadening your search term or reset program/semester filters."
-          actionLabel="Reset Filters"
+          title="No Students in Selected Cohort"
+          description={`No candidates found for ${batchFilter} - ${semesterFilter}. Please select a different batch or semester above.`}
+          actionLabel="Show All Candidates"
           onAction={() => {
             setSearchQuery('');
-            setProgramFilter('all');
+            setBatchFilter('all');
             setSemesterFilter('all');
+            setProgramFilter('all');
           }}
         />
       ) : (
@@ -140,7 +186,7 @@ export const TeacherStudentsPage: React.FC = () => {
                   <TableHead>Candidate &amp; KMU Registration</TableHead>
                   <TableHead>Academic Program</TableHead>
                   <TableHead>Semester</TableHead>
-                  <TableHead>Cumulative GPA</TableHead>
+                  <TableHead>Batch Cohort</TableHead>
                   <TableHead>Enrollment Status</TableHead>
                   <TableHead style={{ textAlign: 'right' }}>Actions</TableHead>
                 </TableRow>
@@ -168,7 +214,7 @@ export const TeacherStudentsPage: React.FC = () => {
                     <TableCell>{student.semester}</TableCell>
 
                     <TableCell>
-                      <strong style={{ color: 'var(--color-slate-900)', fontSize: '0.95rem' }}>{(student.gpa ?? 3.5).toFixed(2)}</strong> / 4.00
+                      <Badge variant="outline">{student.batch || 'Batch A'}</Badge>
                     </TableCell>
 
                     <TableCell>
@@ -257,8 +303,8 @@ export const TeacherStudentsPage: React.FC = () => {
               </div>
 
               <div>
-                <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)', textTransform: 'uppercase' }}>Academic Standing</span>
-                <div style={{ fontWeight: 700, color: '#059669' }}>GPA: {(selectedStudent.gpa ?? 3.5).toFixed(2)} (Good Standing)</div>
+                <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)', textTransform: 'uppercase' }}>Batch Cohort</span>
+                <div style={{ fontWeight: 700, color: 'var(--color-slate-900)' }}>{selectedStudent.batch || 'N/A'}</div>
               </div>
             </div>
           </div>

@@ -310,10 +310,12 @@ service cloud.firestore {
           request.resource.data.examId == resource.data.examId &&
           resource.data.status in ['assigned', 'started', 'submitted'] &&
           request.resource.data.status in ['started', 'submitted'] &&
+          (!('isLocked' in resource.data) || resource.data.isLocked != true || request.resource.data.status == 'submitted') &&
           !request.resource.data.keys().hasAny([
             'marks', 'obtainedMarks', 'mcqMarks', 'writtenMarks',
             'shortQuestionsMarks', 'longQuestionsMarks', 'grade',
-            'percentage', 'passed', 'evaluatedBy', 'writtenEvaluations', 'gradedAt'
+            'percentage', 'passed', 'evaluatedBy', 'writtenEvaluations', 'gradedAt',
+            'isLocked', 'lockedAt', 'lockedBy', 'lockedByName', 'lockedByRole', 'lockReason', 'lockAuditTrail'
           ]) &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'id',
@@ -351,6 +353,14 @@ service cloud.firestore {
       );
       
       allow delete: if isAdmin() || isTeacher();
+    }
+
+    // =========================================================================
+    // EXAM LOCK AUDITS (Teacher/Admin Proctoring Audit Log)
+    // =========================================================================
+    match /examLockAudits/{auditId} {
+      // Only Faculty and Admins can read or write lock audit logs; students have zero access
+      allow read, write: if isAuthenticated() && (isAdmin() || isTeacher());
     }
 
     // =========================================================================

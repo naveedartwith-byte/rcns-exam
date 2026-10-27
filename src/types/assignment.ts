@@ -34,4 +34,25 @@ export interface Assignment {
   codeVerified?: boolean;
   codeVerifiedAt?: Timestamp | string;
   attemptId?: string;
+  isLocked?: boolean;
+  lockedAt?: Timestamp | string;
+  lockedBy?: string;
+  lockedByName?: string;
+  lockedByRole?: 'teacher' | 'admin';
+  lockReason?: string;
+  lockAuditTrail?: ExamLockAuditEntry[];
+}
+
+export interface ExamLockAuditEntry {
+  id?: string;
+  action: 'lock' | 'unlock';
+  timestamp: string;
+  actorId: string;
+  actorName: string;
+  actorRole: 'teacher' | 'admin';
+  reason: string;
+  examId: string;
+  studentId: string;
+  studentName?: string;
+  kmuRegistrationNo?: string;
 }

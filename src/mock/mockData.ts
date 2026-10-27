@@ -79,7 +79,7 @@ export const MOCK_SEMESTERS = [
   'Semester 8',
 ];
 
-export const MOCK_STUDENTS: (StudentProfile & { status: 'active' | 'suspended' | 'graduated'; gpa: number; phone: string; address: string })[] = [
+export const MOCK_STUDENTS: (StudentProfile & { status: 'active' | 'suspended' | 'graduated'; phone: string; address: string })[] = [
   {
     uid: 'student-1',
     role: 'student',
@@ -92,7 +92,6 @@ export const MOCK_STUDENTS: (StudentProfile & { status: 'active' | 'suspended' |
     program: 'BS Nursing (Generic)',
     department: 'Nursing & Allied Health Sciences',
     status: 'active',
-    gpa: 3.78,
     phone: '+92 300 1234567',
     address: 'Saidu Sharif, Swat, KPK',
     createdAt: '2025-09-01T08:00:00Z',
@@ -110,7 +109,6 @@ export const MOCK_STUDENTS: (StudentProfile & { status: 'active' | 'suspended' |
     program: 'BS Nursing (Generic)',
     department: 'Nursing & Allied Health Sciences',
     status: 'active',
-    gpa: 3.92,
     phone: '+92 301 9876543',
     address: 'Mingora, Swat, KPK',
     createdAt: '2025-09-01T08:00:00Z',
@@ -128,7 +126,6 @@ export const MOCK_STUDENTS: (StudentProfile & { status: 'active' | 'suspended' |
     program: 'Doctor of Physical Therapy (DPT)',
     department: 'Physical Therapy & Rehabilitation',
     status: 'active',
-    gpa: 3.45,
     phone: '+92 302 5551234',
     address: 'Kabal, Swat, KPK',
     createdAt: '2026-01-10T08:00:00Z',
@@ -146,7 +143,6 @@ export const MOCK_STUDENTS: (StudentProfile & { status: 'active' | 'suspended' |
     program: 'Post-RN BSN',
     department: 'Nursing & Allied Health Sciences',
     status: 'active',
-    gpa: 3.65,
     phone: '+92 303 4448899',
     address: 'Matta, Swat, KPK',
     createdAt: '2024-09-01T08:00:00Z',
@@ -164,7 +160,6 @@ export const MOCK_STUDENTS: (StudentProfile & { status: 'active' | 'suspended' |
     program: 'BS Medical Laboratory Technology',
     department: 'Medical Diagnostic Sciences',
     status: 'active',
-    gpa: 3.20,
     phone: '+92 304 3332211',
     address: 'Barikot, Swat, KPK',
     createdAt: '2025-09-01T08:00:00Z',
@@ -182,7 +177,6 @@ export const MOCK_STUDENTS: (StudentProfile & { status: 'active' | 'suspended' |
     program: 'BS Radiology & Imaging Technology',
     department: 'Medical Diagnostic Sciences',
     status: 'suspended',
-    gpa: 2.40,
     phone: '+92 305 7776655',
     address: 'Khwazakhela, Swat, KPK',
     createdAt: '2026-02-01T08:00:00Z',

@@ -530,7 +530,7 @@ export const AdminTeachersPage: React.FC = () => {
             />
             <Checkbox
               label="View Student Complete Dossiers"
-              description="Access KMU registration records and GPAs"
+              description="Access KMU registration records and student profiles"
               defaultChecked
             />
             <Checkbox

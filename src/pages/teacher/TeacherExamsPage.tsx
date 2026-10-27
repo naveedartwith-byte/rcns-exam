@@ -168,6 +168,17 @@ export const TeacherExamsPage: React.FC = () => {
   const [isGradingLoading, setIsGradingLoading] = useState(false);
   const [gradingNotice, setGradingNotice] = useState<string | null>(null);
 
+  // Student Exam Lock State (Feature 3: Teacher-Controlled Exam Lock for Misbehavior)
+  const [lockingStudentAttempt, setLockingStudentAttempt] = useState<any | null>(null);
+  const [lockReasonCategory, setLockReasonCategory] = useState<string>('Suspected Cheating / Unauthorized Material');
+  const [lockReasonDetails, setLockReasonDetails] = useState<string>('');
+  const [isLockingInProgress, setIsLockingInProgress] = useState<boolean>(false);
+  const [unlockingStudentAttempt, setUnlockingStudentAttempt] = useState<any | null>(null);
+  const [unlockReasonNotes, setUnlockReasonNotes] = useState<string>('');
+  const [isUnlockingInProgress, setIsUnlockingInProgress] = useState<boolean>(false);
+  const [lockAuditList, setLockAuditList] = useState<any[]>([]);
+  const [isLockAuditModalOpen, setIsLockAuditModalOpen] = useState(false);
+
   // Dialog states
   const [showDeleteExamConfirm, setShowDeleteExamConfirm] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ type: 'success' | 'danger'; text: string } | null>(null);
@@ -479,6 +490,85 @@ export const TeacherExamsPage: React.FC = () => {
       setGradingNotice(`Grading notice: ${err?.message || 'Error occurred during grading.'}`);
     } finally {
       setIsGradingLoading(false);
+    }
+  };
+
+  const handleConfirmLock = async () => {
+    if (!lockingStudentAttempt || !selectedExamForGrading) return;
+    try {
+      setIsLockingInProgress(true);
+      const fullReason = lockReasonDetails.trim()
+        ? `${lockReasonCategory}: ${lockReasonDetails.trim()}`
+        : lockReasonCategory;
+
+      await assignmentService.lockStudentExamAttempt({
+        examId: selectedExamForGrading.id,
+        studentId: lockingStudentAttempt.studentId,
+        actorId: currentUser?.uid || 'faculty-invigilator',
+        actorName: userProfile?.name || 'Authorized Invigilator',
+        actorRole: 'teacher',
+        reason: fullReason,
+      });
+
+      // Refresh roster
+      const roster = await assignmentService.getExamCandidateRoster(selectedExamForGrading.id);
+      setExamCandidateRoster(roster);
+      setNotification({
+        type: 'success',
+        text: `Exam attempt for ${lockingStudentAttempt.studentName || 'candidate'} has been temporarily locked.`,
+      });
+      setLockingStudentAttempt(null);
+      setLockReasonDetails('');
+    } catch (err: any) {
+      setNotification({
+        type: 'danger',
+        text: err?.message || 'Failed to lock examination attempt.',
+      });
+    } finally {
+      setIsLockingInProgress(false);
+    }
+  };
+
+  const handleConfirmUnlock = async () => {
+    if (!unlockingStudentAttempt || !selectedExamForGrading) return;
+    try {
+      setIsUnlockingInProgress(true);
+      await assignmentService.unlockStudentExamAttempt({
+        examId: selectedExamForGrading.id,
+        studentId: unlockingStudentAttempt.studentId,
+        actorId: currentUser?.uid || 'faculty-invigilator',
+        actorName: userProfile?.name || 'Authorized Invigilator',
+        actorRole: 'teacher',
+        reason: unlockReasonNotes.trim() || 'Invigilator authorization restored',
+      });
+
+      // Refresh roster
+      const roster = await assignmentService.getExamCandidateRoster(selectedExamForGrading.id);
+      setExamCandidateRoster(roster);
+      setNotification({
+        type: 'success',
+        text: `Exam attempt for ${unlockingStudentAttempt.studentName || 'candidate'} has been unlocked. Candidate may resume.`,
+      });
+      setUnlockingStudentAttempt(null);
+      setUnlockReasonNotes('');
+    } catch (err: any) {
+      setNotification({
+        type: 'danger',
+        text: err?.message || 'Failed to unlock examination attempt.',
+      });
+    } finally {
+      setIsUnlockingInProgress(false);
+    }
+  };
+
+  const handleOpenLockAuditModal = async () => {
+    if (!selectedExamForGrading) return;
+    try {
+      const audits = await assignmentService.getExamLockAudits(selectedExamForGrading.id);
+      setLockAuditList(audits);
+      setIsLockAuditModalOpen(true);
+    } catch (err) {
+      console.warn('Could not load exam lock audits:', err);
     }
   };
 
@@ -1749,7 +1839,7 @@ export const TeacherExamsPage: React.FC = () => {
             ) : proctorModalTab === 'active_candidates' ? (
               /* Live Proctoring & Active Candidates Inspection (Requirement #7) */
               (() => {
-                const activeCandidates = examCandidateRoster.filter((r) => r.status === 'started');
+                const activeCandidates = examCandidateRoster.filter((r) => r.status === 'started' || r.isLocked === true);
                 return (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                     <div
@@ -1769,24 +1859,34 @@ export const TeacherExamsPage: React.FC = () => {
                         <span style={{ width: '12px', height: '12px', borderRadius: '50%', backgroundColor: '#10b981' }} />
                         <div>
                           <strong style={{ color: '#065f46', fontSize: '0.95rem' }}>
-                            {activeCandidates.length} Candidate(s) Actively Giving Exam Now
+                            {activeCandidates.length} Candidate(s) in Active Session
                           </strong>
                           <div style={{ fontSize: '0.78rem', color: '#047857' }}>
-                            Live monitoring auto-refreshes every 10 seconds
+                            Live monitoring auto-refreshes every 10 seconds • Invigilator Misbehavior Locks available
                           </div>
                         </div>
                       </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={async () => {
-                          if (!selectedExamForGrading) return;
-                          const roster = await assignmentService.getExamCandidateRoster(selectedExamForGrading.id);
-                          setExamCandidateRoster(roster);
-                        }}
-                      >
-                        🔄 Refresh Live Roster
-                      </Button>
+                      <div style={{ display: 'flex', gap: '0.5rem' }}>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handleOpenLockAuditModal}
+                          style={{ borderColor: '#0f2744', color: '#0f2744' }}
+                        >
+                          📜 Lock Audit History
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={async () => {
+                            if (!selectedExamForGrading) return;
+                            const roster = await assignmentService.getExamCandidateRoster(selectedExamForGrading.id);
+                            setExamCandidateRoster(roster);
+                          }}
+                        >
+                          🔄 Refresh Live Roster
+                        </Button>
+                      </div>
                     </div>
 
                     {activeCandidates.length === 0 ? (
@@ -1804,6 +1904,7 @@ export const TeacherExamsPage: React.FC = () => {
                               <TableHead>Cohort / Batch</TableHead>
                               <TableHead>Progress</TableHead>
                               <TableHead>Live Proctor Status</TableHead>
+                              <TableHead style={{ textAlign: 'right' }}>Security Actions</TableHead>
                             </TableRow>
                           </TableHeader>
                           <TableBody>
@@ -1822,9 +1923,46 @@ export const TeacherExamsPage: React.FC = () => {
                                   </span>
                                 </TableCell>
                                 <TableCell>
-                                  <Badge variant="success">
-                                    🟢 Active Now
-                                  </Badge>
+                                  {candidate.isLocked ? (
+                                    <div>
+                                      <Badge variant="danger">🔒 Exam Locked</Badge>
+                                      <div style={{ fontSize: '0.72rem', color: '#b91c1c', marginTop: '0.2rem', fontWeight: 600 }}>
+                                        {candidate.lockReason || 'Invigilator Lock'}
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <Badge variant="success">
+                                      🟢 Active Now
+                                    </Badge>
+                                  )}
+                                </TableCell>
+                                <TableCell style={{ textAlign: 'right' }}>
+                                  {candidate.isLocked ? (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => {
+                                        setUnlockingStudentAttempt(candidate);
+                                        setUnlockReasonNotes('');
+                                      }}
+                                      style={{ borderColor: '#059669', color: '#059669', fontWeight: 700 }}
+                                    >
+                                      🔓 Unlock Exam
+                                    </Button>
+                                  ) : (
+                                    <Button
+                                      variant="danger"
+                                      size="sm"
+                                      onClick={() => {
+                                        setLockingStudentAttempt(candidate);
+                                        setLockReasonCategory('Suspected Cheating / Unauthorized Material');
+                                        setLockReasonDetails('');
+                                      }}
+                                      style={{ backgroundColor: '#dc2626', color: '#ffffff', fontWeight: 700 }}
+                                    >
+                                      🔒 Lock Exam
+                                    </Button>
+                                  )}
                                 </TableCell>
                               </TableRow>
                             ))}
@@ -2058,6 +2196,269 @@ export const TeacherExamsPage: React.FC = () => {
             fetchTeacherExams();
           }}
         />
+      )}
+
+      {/* Lock Candidate Examination Modal (Feature 3: Teacher-Controlled Exam Lock for Misbehavior) */}
+      {lockingStudentAttempt && (
+        <Modal
+          isOpen={Boolean(lockingStudentAttempt)}
+          onClose={() => !isLockingInProgress && setLockingStudentAttempt(null)}
+          title="Lock Candidate Examination: Invigilator Action"
+          description="ROYAL COLLEGE OF NURSING SWAT • Examination Proctoring & Security"
+          maxWidth="md"
+          footer={
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', width: '100%' }}>
+              <Button
+                variant="outline"
+                onClick={() => setLockingStudentAttempt(null)}
+                disabled={isLockingInProgress}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="danger"
+                onClick={handleConfirmLock}
+                disabled={isLockingInProgress}
+                style={{ backgroundColor: '#dc2626', color: '#ffffff', fontWeight: 700 }}
+              >
+                {isLockingInProgress ? 'Locking Exam...' : 'Confirm & Lock Examination'}
+              </Button>
+            </div>
+          }
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+            <div
+              style={{
+                padding: '0.85rem 1rem',
+                backgroundColor: '#fef2f2',
+                border: '1px solid #fecaca',
+                borderRadius: 'var(--radius-md)',
+                color: '#991b1b',
+                fontSize: '0.85rem',
+                lineHeight: 1.5,
+              }}
+            >
+              <strong>Security Protocol Warning:</strong> Locking temporarily freezes the candidate's testing session.
+              The exam timer continues running without pause or extension. The candidate will be blocked from answering questions
+              or submitting answers until unlocked. All previously recorded responses remain preserved.
+            </div>
+
+            <div
+              style={{
+                backgroundColor: 'var(--color-slate-50)',
+                padding: '0.85rem 1rem',
+                borderRadius: 'var(--radius-md)',
+                display: 'grid',
+                gridTemplateColumns: 'repeat(2, 1fr)',
+                gap: '0.75rem',
+                fontSize: '0.85rem',
+              }}
+            >
+              <div>
+                <span style={{ fontSize: '0.75rem', color: 'var(--color-slate-500)', textTransform: 'uppercase' }}>Candidate Name</span>
+                <div style={{ fontWeight: 700, color: 'var(--color-slate-900)' }}>
+                  {lockingStudentAttempt.studentName || 'Student Candidate'}
+                </div>
+              </div>
+              <div>
+                <span style={{ fontSize: '0.75rem', color: 'var(--color-slate-500)', textTransform: 'uppercase' }}>KMU Registration #</span>
+                <div style={{ fontWeight: 700, color: 'var(--color-slate-900)' }}>
+                  {lockingStudentAttempt.kmuRegistrationNo || '—'}
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: 'var(--color-slate-700)', marginBottom: '0.4rem' }}>
+                Reason for Locking Attempt <span style={{ color: '#dc2626' }}>*</span>
+              </label>
+              <Select
+                options={[
+                  { value: 'Suspected Cheating / Unauthorized Material', label: 'Suspected Cheating / Unauthorized Material' },
+                  { value: 'Student Misbehavior / In-Exam Disruption', label: 'Student Misbehavior / In-Exam Disruption' },
+                  { value: 'Unapproved Communication with Others', label: 'Unapproved Communication with Others' },
+                  { value: 'Unauthorized Device / Screen Sharing Detected', label: 'Unauthorized Device / Screen Sharing Detected' },
+                  { value: 'Multiple Tab Switching / Window Blur Violations', label: 'Multiple Tab Switching / Window Blur Violations' },
+                  { value: 'Other Authorized Invigilator Reason', label: 'Other Authorized Invigilator Reason' },
+                ]}
+                value={lockReasonCategory}
+                onChange={(e) => setLockReasonCategory(e.target.value)}
+              />
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: 'var(--color-slate-700)', marginBottom: '0.4rem' }}>
+                Specific Incident Notes / Details (Optional)
+              </label>
+              <textarea
+                value={lockReasonDetails}
+                onChange={(e) => setLockReasonDetails(e.target.value)}
+                placeholder="e.g. Student caught talking to adjacent candidate in Row 3; refused repeated verbal warnings."
+                rows={3}
+                style={{
+                  width: '100%',
+                  padding: '0.65rem 0.85rem',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid var(--color-slate-300)',
+                  fontSize: '0.875rem',
+                  fontFamily: 'inherit',
+                  resize: 'vertical',
+                }}
+              />
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Unlock Candidate Examination Modal */}
+      {unlockingStudentAttempt && (
+        <Modal
+          isOpen={Boolean(unlockingStudentAttempt)}
+          onClose={() => !isUnlockingInProgress && setUnlockingStudentAttempt(null)}
+          title="Unlock Candidate Examination Session"
+          description="ROYAL COLLEGE OF NURSING SWAT • Restore Candidate Examination"
+          maxWidth="md"
+          footer={
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', width: '100%' }}>
+              <Button
+                variant="outline"
+                onClick={() => setUnlockingStudentAttempt(null)}
+                disabled={isUnlockingInProgress}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                onClick={handleConfirmUnlock}
+                disabled={isUnlockingInProgress}
+                style={{ backgroundColor: '#059669', color: '#ffffff', fontWeight: 700 }}
+              >
+                {isUnlockingInProgress ? 'Unlocking Exam...' : 'Confirm & Restore Access'}
+              </Button>
+            </div>
+          }
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+            <div
+              style={{
+                padding: '0.85rem 1rem',
+                backgroundColor: '#ecfdf5',
+                border: '1px solid #a7f3d0',
+                borderRadius: 'var(--radius-md)',
+                color: '#065f46',
+                fontSize: '0.85rem',
+                lineHeight: 1.5,
+              }}
+            >
+              <strong>Session Restoration:</strong> Unlocking restores full testing interaction to the candidate with their existing attempt and remaining time. Previous responses are fully preserved.
+            </div>
+
+            <div
+              style={{
+                backgroundColor: 'var(--color-slate-50)',
+                padding: '0.85rem 1rem',
+                borderRadius: 'var(--radius-md)',
+                display: 'grid',
+                gridTemplateColumns: 'repeat(2, 1fr)',
+                gap: '0.75rem',
+                fontSize: '0.85rem',
+              }}
+            >
+              <div>
+                <span style={{ fontSize: '0.75rem', color: 'var(--color-slate-500)', textTransform: 'uppercase' }}>Candidate Name</span>
+                <div style={{ fontWeight: 700, color: 'var(--color-slate-900)' }}>
+                  {unlockingStudentAttempt.studentName || 'Student Candidate'}
+                </div>
+              </div>
+              <div>
+                <span style={{ fontSize: '0.75rem', color: 'var(--color-slate-500)', textTransform: 'uppercase' }}>Current Lock Reason</span>
+                <div style={{ fontWeight: 600, color: '#dc2626' }}>
+                  {unlockingStudentAttempt.lockReason || 'Invigilator Lock'}
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: 'var(--color-slate-700)', marginBottom: '0.4rem' }}>
+                Resolution / Authorization Notes (Optional)
+              </label>
+              <input
+                type="text"
+                value={unlockReasonNotes}
+                onChange={(e) => setUnlockReasonNotes(e.target.value)}
+                placeholder="e.g. Verbal warning administered, issue resolved, student permitted to continue."
+                style={{
+                  width: '100%',
+                  padding: '0.65rem 0.85rem',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid var(--color-slate-300)',
+                  fontSize: '0.875rem',
+                }}
+              />
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Lock Audit History Modal */}
+      {isLockAuditModalOpen && (
+        <Modal
+          isOpen={isLockAuditModalOpen}
+          onClose={() => setIsLockAuditModalOpen(false)}
+          title="Exam Lock & Unlock Proctoring Audit Trail"
+          description={`Audit records for: ${selectedExamForGrading?.title || 'Examination'}`}
+          maxWidth="lg"
+          footer={
+            <Button variant="primary" onClick={() => setIsLockAuditModalOpen(false)} style={{ backgroundColor: '#0f2744' }}>
+              Close Audit Log
+            </Button>
+          }
+        >
+          {lockAuditList.length === 0 ? (
+            <EmptyState
+              title="No Lock Events Recorded"
+              description="No exam lock or unlock events have been logged for this paper."
+            />
+          ) : (
+            <TableContainer>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Timestamp</TableHead>
+                    <TableHead>Action</TableHead>
+                    <TableHead>Candidate</TableHead>
+                    <TableHead>KMU Reg #</TableHead>
+                    <TableHead>Invigilator / Actor</TableHead>
+                    <TableHead>Reason &amp; Notes</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {lockAuditList.map((log, idx) => (
+                    <TableRow key={log.id || idx}>
+                      <TableCell style={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
+                        {formatPakistanDateTime(log.timestamp)}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={log.action === 'lock' ? 'danger' : 'success'}>
+                          {log.action === 'lock' ? '🔒 LOCKED' : '🔓 UNLOCKED'}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <strong>{log.studentName || log.studentId}</strong>
+                      </TableCell>
+                      <TableCell>{log.kmuRegistrationNo || '—'}</TableCell>
+                      <TableCell>
+                        <div>{log.actorName || log.actorId}</div>
+                        <div style={{ fontSize: '0.72rem', color: 'var(--color-slate-500)' }}>Role: {log.actorRole}</div>
+                      </TableCell>
+                      <TableCell style={{ fontSize: '0.85rem' }}>{log.reason}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
+        </Modal>
       )}
     </div>
   );

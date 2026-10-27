@@ -463,7 +463,7 @@ export const StudentDashboardPage: React.FC = () => {
             <div>
               <CardTitle>Recent Examination Results</CardTitle>
               <span style={{ fontSize: '0.8rem', color: 'var(--color-slate-500)' }}>
-                Published official transcripts &amp; GPA records
+                Published official transcripts &amp; score records
               </span>
             </div>
             <Button variant="outline" size="sm" onClick={() => navigate('/student/results')}>
