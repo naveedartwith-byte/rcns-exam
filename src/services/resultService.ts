@@ -9,9 +9,9 @@ import {
   getDocs,
   serverTimestamp,
 } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
+
 import { db } from '../firebase/firestore';
-import { functions } from '../firebase/functions';
+
 import type { Result } from '../types/result';
 import type { MasterQuestion } from '../types/question';
 import {

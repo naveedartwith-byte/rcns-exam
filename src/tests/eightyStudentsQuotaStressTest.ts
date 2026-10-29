@@ -6,7 +6,7 @@
  * without exceeding Firebase Spark Free Tier quotas (20,000 writes/day and 50,000 reads/day).
  */
 
-import { gradeExamSubmission, calculateKmuGrade } from '../utils/secureGrading.ts';
+import { gradeExamSubmission } from '../utils/secureGrading.ts';
 import type { Exam } from '../types/exam.ts';
 import type { MasterQuestion, StudentQuestion } from '../types/question.ts';
 import type { Result } from '../types/result.ts';
@@ -110,8 +110,11 @@ const mockExam: Exam = {
   startAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
   endAt: new Date(Date.now() + 120 * 60 * 1000).toISOString(),
   sanitizedQuestions: mockSanitizedQuestions,
-  questionsCount: mockSanitizedQuestions.length,
+  description: 'Final Comprehensive Exam for Nursing Students',
+  teacherId: 'teacher-mock-uid',
+  questionCount: mockSanitizedQuestions.length,
   createdAt: new Date().toISOString(),
+  updatedAt: new Date().toISOString(),
 };
 
 // Simulated In-Memory Database
@@ -223,7 +226,7 @@ async function simulateStudentJourney(uid: string, studentIdx: number): Promise<
   // Reads: assignment doc check (1), embedded questions from parent exam doc (1), onSnapshot listener attach (1)
   // Writes: ensureStudentAssignment (1)
   const assignmentId = `${targetExam.id}_${uid}`;
-  const existingAssign = dbGetDoc('assignments', assignmentId);
+  dbGetDoc('assignments', assignmentId);
   dbSetDoc('assignments', assignmentId, {
     id: assignmentId,
     examId: targetExam.id,
@@ -251,7 +254,7 @@ async function simulateStudentJourney(uid: string, studentIdx: number): Promise<
   loadedQuestions.forEach((q, qIdx) => {
     // 85% chance of picking correct answer for realistic nursing candidates
     const pickCorrect = (studentIdx + qIdx) % 7 !== 0;
-    const correctLetter = mockMasterQuestions[qIdx].correctAnswer;
+    const correctLetter = String(mockMasterQuestions[qIdx].correctAnswer);
     simulatedAnswers[qIdx] = pickCorrect ? (correctLetter.charCodeAt(0) - 65) : ((correctLetter.charCodeAt(0) - 65 + 1) % 4);
     simulatedAnswers[q.id] = simulatedAnswers[qIdx];
   });
