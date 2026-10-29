@@ -928,6 +928,7 @@ export const StudentExamsPage: React.FC = () => {
         studentId: activeUser.uid,
         studentName: userProfile?.name || studentProfile?.name || 'Student Candidate',
         kmuRegistrationNo: studentProfile?.kmuRegistrationNo || '',
+        fatherName: studentProfile?.fatherName || (userProfile as any)?.fatherName || '',
         examId: takingExam.id,
         examTitle: takingExam.title,
         examType: takingExam.type,

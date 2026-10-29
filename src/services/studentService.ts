@@ -1,3 +1,10 @@
+// In-memory cache for student profiles to drastically reduce repeated Firestore reads
+let cachedAllStudents: { list: StudentProfile[]; cachedAt: number } | null = null;
+
+export function clearStudentProfilesCache() {
+  cachedAllStudents = null;
+}
+
 import {
   doc,
   getDoc,
@@ -214,10 +221,15 @@ export const studentService = {
   /**
    * Retrieves all student profiles in the institution.
    */
-  async getAllStudents(): Promise<StudentProfile[]> {
+  async getAllStudents(forceRefresh: boolean = false): Promise<StudentProfile[]> {
+    if (!forceRefresh && cachedAllStudents && Date.now() - cachedAllStudents.cachedAt < 5 * 60 * 1000) {
+      return cachedAllStudents.list;
+    }
     const studentsCol = collection(db, 'students');
     const snapshot = await getDocs(studentsCol);
-    return snapshot.docs.map((docSnap) => docSnap.data() as StudentProfile);
+    const list = snapshot.docs.map((docSnap) => docSnap.data() as StudentProfile);
+    cachedAllStudents = { list, cachedAt: Date.now() };
+    return list;
   },
 
   /**

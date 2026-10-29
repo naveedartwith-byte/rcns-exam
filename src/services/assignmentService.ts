@@ -15,6 +15,14 @@ import type { Assignment, AssignmentStatus, ExamLockAuditEntry } from '../types/
 import type { Exam } from '../types/exam';
 import { getEffectiveExamStatus, parseDateToMillis } from '../utils/dateTime';
 
+// In-memory cache for exam documents to prevent N+1 getDoc queries per student
+const examDocMemoryCache = new Map<string, { data: Exam; cachedAt: number }>();
+
+export function clearAssignmentExamCache(examId?: string) {
+  if (examId) examDocMemoryCache.delete(examId);
+  else examDocMemoryCache.clear();
+}
+
 export const assignmentService = {
   /**
    * Retrieves assignments assigned to a specific student.

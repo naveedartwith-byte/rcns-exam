@@ -17,6 +17,7 @@ export interface Assignment {
   examType?: string;
   subject?: string;
   studentName?: string;
+  fatherName?: string;
   kmuRegistrationNo?: string;
   totalMarks?: number;
   answers?: Record<string, any>;

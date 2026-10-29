@@ -35,6 +35,21 @@ interface ExamResultsReportsViewProps {
   userRole: 'teacher' | 'admin';
 }
 
+// Module-level in-memory cache for exam reports to eliminate repetitive Firestore reads
+interface CachedExamReportData {
+  results: Result[];
+  assignments: Assignment[];
+  masterQuestions: MasterQuestion[];
+  studentsMap: Record<string, StudentProfile>;
+  cachedAt: number;
+}
+const reportsDataCache = new Map<string, CachedExamReportData>();
+
+export function clearReportsDataCache(examId?: string) {
+  if (examId) reportsDataCache.delete(examId);
+  else reportsDataCache.clear();
+}
+
 export const ExamResultsReportsView: React.FC<ExamResultsReportsViewProps> = ({ userRole }) => {
   const { currentUser } = useAuth();
 
@@ -120,7 +135,27 @@ export const ExamResultsReportsView: React.FC<ExamResultsReportsViewProps> = ({ 
     }
 
     let isMounted = true;
-    const fetchExamData = async () => {
+    const fetchExamData = async (forceRefresh: boolean = false) => {
+      // 1. Check in-memory cache (3 minutes fresh) to avoid re-querying Firestore on tab/filter changes
+      if (!forceRefresh && reportsDataCache.has(selectedExamId)) {
+        const cached = reportsDataCache.get(selectedExamId)!;
+        if (Date.now() - cached.cachedAt < 3 * 60 * 1000) {
+          if (isMounted) {
+            setResults(cached.results);
+            setAssignments(cached.assignments);
+            setMasterQuestions(cached.masterQuestions);
+            setStudentsMap(cached.studentsMap || {});
+            if (cached.results.length > 0) {
+              setSelectedStudentResult((prev) => prev ? cached.results.find((r) => r.id === prev.id) || cached.results[0] : cached.results[0]);
+            } else {
+              setSelectedStudentResult(null);
+            }
+            setResultsLoading(false);
+          }
+          return;
+        }
+      }
+
       try {
         setResultsLoading(true);
         const [resList, assignList, fetchedQs] = await Promise.all([
@@ -133,10 +168,39 @@ export const ExamResultsReportsView: React.FC<ExamResultsReportsViewProps> = ({ 
           ? fetchedQs
           : (((selectedExam as any)?.questions as any[]) || []);
 
+        // Targeted lookup for fatherName ONLY for candidates who took this exam and don't have it saved
+        const currentSMap: Record<string, StudentProfile> = { ...studentsMap };
+        const missingUidSet = new Set<string>();
+        resList.forEach((r) => {
+          if (!r.fatherName && !currentSMap[r.studentId]) {
+            missingUidSet.add(r.studentId);
+          }
+        });
+
+        if (missingUidSet.size > 0) {
+          const fetchPromises = Array.from(missingUidSet).slice(0, 30).map(async (uid) => {
+            try {
+              const prof = await studentService.getStudentProfile(uid);
+              if (prof) currentSMap[uid] = prof;
+            } catch {}
+          });
+          await Promise.all(fetchPromises);
+        }
+
+        // Cache the combined response in memory
+        reportsDataCache.set(selectedExamId, {
+          results: resList,
+          assignments: assignList,
+          masterQuestions: masterQs,
+          studentsMap: currentSMap,
+          cachedAt: Date.now(),
+        });
+
         if (isMounted) {
           setResults(resList);
           setAssignments(assignList);
           setMasterQuestions(masterQs);
+          setStudentsMap(currentSMap);
           if (resList.length > 0) {
             setSelectedStudentResult(resList[0]);
           } else {
@@ -151,15 +215,19 @@ export const ExamResultsReportsView: React.FC<ExamResultsReportsViewProps> = ({ 
       }
     };
 
-    fetchExamData();
+    fetchExamData(false);
     return () => {
       isMounted = false;
     };
   }, [selectedExamId, selectedExam]);
 
-  // Helper to extract father's name safely from student map or result
+  // Helper to extract father's name safely from result, assignment, or student map
   const getFatherName = (r: Result): string => {
-    if ((r as any).fatherName) return (r as any).fatherName;
+    if ((r as any).fatherName && String((r as any).fatherName).trim() && (r as any).fatherName !== 'N/A') return (r as any).fatherName;
+    const matchingAssign = assignments.find((a) => a.studentId === r.studentId);
+    if (matchingAssign && (matchingAssign as any).fatherName && String((matchingAssign as any).fatherName).trim()) {
+      return (matchingAssign as any).fatherName;
+    }
     const profile = studentsMap[r.studentId];
     return profile?.fatherName || 'N/A';
   };

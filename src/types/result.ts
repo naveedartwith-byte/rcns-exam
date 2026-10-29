@@ -8,6 +8,7 @@ export interface Result {
   examId: string;
   studentId: string;
   studentName?: string;
+  fatherName?: string;
   kmuRegistrationNo?: string;
   examTitle?: string;
   examType?: string;

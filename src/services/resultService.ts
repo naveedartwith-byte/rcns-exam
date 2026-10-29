@@ -1,3 +1,9 @@
+let cachedAllResults: { list: Result[]; cachedAt: number } | null = null;
+
+export function clearAllResultsCache() {
+  cachedAllResults = null;
+}
+
 import {
   doc,
   getDoc,
@@ -23,7 +29,27 @@ import { MOCK_QUESTIONS } from '../mock/mockData';
 
 export { checkAnswerMatch };
 
+// In-memory Master Questions Cache to eliminate repeated question reads during exam
+const examMasterQuestionsCache = new Map<string, MasterQuestion[]>();
+
+export function clearExamQuestionsCache(examId?: string) {
+  if (examId) examMasterQuestionsCache.delete(examId);
+  else examMasterQuestionsCache.clear();
+}
+
 export async function getMasterQuestionsForExam(examId: string, examData?: any): Promise<MasterQuestion[]> {
+  if (!examId) return [];
+  if (examMasterQuestionsCache.has(examId)) {
+    return examMasterQuestionsCache.get(examId)!;
+  }
+
+  // 1. If parent exam document already embeds master questions, use directly with 0 reads
+  if (Array.isArray(examData?.questions) && examData.questions.length > 0) {
+    const sorted = [...examData.questions].sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0));
+    examMasterQuestionsCache.set(examId, sorted);
+    return sorted;
+  }
+
   let masterQs: MasterQuestion[] = [];
   try {
     const qCol = collection(db, 'questions');
@@ -36,15 +62,15 @@ export async function getMasterQuestionsForExam(examId: string, examData?: any):
     console.warn('[getMasterQuestionsForExam] Could not query questions collection:', err);
   }
 
-  if (masterQs.length === 0 && Array.isArray(examData?.questions) && examData.questions.length > 0) {
-    masterQs = examData.questions;
-  }
-
   if (masterQs.length === 0 && (MOCK_QUESTIONS as any)[examId]) {
     masterQs = (MOCK_QUESTIONS as any)[examId];
   }
 
-  return masterQs.sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0));
+  const sorted = masterQs.sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0));
+  if (sorted.length > 0) {
+    examMasterQuestionsCache.set(examId, sorted);
+  }
+  return sorted;
 }
 
 function sortResultsNewestFirst(results: Result[]): Result[] {
@@ -231,11 +257,16 @@ export const resultService = {
   /**
    * Retrieves all results across the institution (Admin view), sorted newest first.
    */
-  async getAllResults(): Promise<Result[]> {
+  async getAllResults(forceRefresh: boolean = false): Promise<Result[]> {
+    if (!forceRefresh && cachedAllResults && Date.now() - cachedAllResults.cachedAt < 3 * 60 * 1000) {
+      return cachedAllResults.list;
+    }
     const resultsCol = collection(db, 'results');
     const snapshot = await getDocs(resultsCol);
     const results = snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Result));
-    return sortResultsNewestFirst(results);
+    const sorted = sortResultsNewestFirst(results);
+    cachedAllResults = { list: sorted, cachedAt: Date.now() };
+    return sorted;
   },
 
   /**
@@ -249,6 +280,7 @@ export const resultService = {
     studentId: string;
     studentName?: string;
     kmuRegistrationNo?: string;
+    fatherName?: string;
     examTitle?: string;
     examType?: string;
     subject?: string;
@@ -336,6 +368,7 @@ export const resultService = {
         studentId: params.studentId,
         studentName: params.studentName || 'Student Candidate',
         kmuRegistrationNo: params.kmuRegistrationNo || '',
+        fatherName: params.fatherName || '',
         examTitle: params.examTitle || examData?.title || 'Academic Examination',
         examType: (params.examType as any) || examData?.type || 'exam',
         subject: params.subject || examData?.subject || 'Clinical Assessment',
@@ -486,6 +519,7 @@ export const resultService = {
       studentId: params.studentId,
       studentName: params.studentName || 'Student Candidate',
       kmuRegistrationNo: params.kmuRegistrationNo,
+      fatherName: params.fatherName || '',
       examTitle: params.examTitle || examData?.title || 'Academic Examination',
       examType: (params.examType as any) || examData?.type || 'exam',
       subject: params.subject || examData?.subject || 'Clinical Assessment',
@@ -523,6 +557,7 @@ export const resultService = {
     // so students can view their grades immediately without requiring teacher submission
     try {
       await setDoc(resultRef, resultData, { merge: true });
+      clearAllResultsCache();
       console.log('[resultService] Successfully recorded result document in Firestore:', resultId);
     } catch (saveErr) {
       console.warn('[resultService] Direct result document save notice:', saveErr);
