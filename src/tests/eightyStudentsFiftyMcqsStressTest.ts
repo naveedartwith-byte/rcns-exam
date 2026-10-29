@@ -9,7 +9,7 @@
  * - Telemetry tracking of billable Firestore Reads and Writes under the new optimizations.
  */
 
-import { gradeExamSubmission, calculateKmuGrade, checkAnswerMatch } from '../utils/secureGrading.ts';
+import { gradeExamSubmission, calculateKmuGrade } from '../utils/secureGrading.ts';
 import type { Exam } from '../types/exam.ts';
 import type { MasterQuestion, StudentQuestion } from '../types/question.ts';
 import type { Result } from '../types/result.ts';
@@ -73,7 +73,7 @@ const mockSanitizedQuestions: StudentQuestion[] = mockMasterQuestions.map((q, id
   order: idx + 1,
 }));
 
-const mockExam: Exam = {
+const mockExam: Exam & { questions?: MasterQuestion[] } = {
   id: 'exam-medsurg-comprehensive-50',
   title: 'Comprehensive Adult Health Nursing Assessment (50 MCQs)',
   subject: 'Adult Health Nursing II',
@@ -149,11 +149,13 @@ for (let i = 1; i <= TOTAL_STUDENTS; i++) {
   const fatherName = sampleFatherNames[(i - 1) % sampleFatherNames.length];
   studentUids.push(uid);
 
+  const email = `candidate${numStr}@royalcollege.edu.pk`;
+
   database.users.set(uid, {
     uid,
     role: 'student',
     name: `Student Candidate ${numStr}`,
-    email: `candidate${numStr}@royalcollege.edu.pk`,
+    email,
   });
 
   database.students.set(uid, {
@@ -161,6 +163,7 @@ for (let i = 1; i <= TOTAL_STUDENTS; i++) {
     role: 'student',
     name: `Student Candidate ${numStr}`,
     fatherName,
+    email,
     kmuRegistrationNo: kmu,
     batch: 'Batch 16th',
     semester: 'Semester 2',
@@ -174,7 +177,7 @@ for (let i = 1; i <= TOTAL_STUDENTS; i++) {
   database.kmuRegistrations.set(kmu, {
     kmuRegistrationNo: kmu,
     uid,
-    email: `candidate${numStr}@royalcollege.edu.pk`,
+    email,
   });
 }
 
@@ -204,7 +207,11 @@ examDocMemoryCache.set(mockExam.id, { data: mockExam, cachedAt: Date.now() });
 async function simulateStudentExam(uid: string, studentIdx: number): Promise<StudentSessionResult> {
   const student = database.students.get(uid)!;
 
-  // 1. Session start & assignment check (1 read, 1 write)
+  // 1. Cohort discovery (1 query read)
+  const availableExams = dbQueryCohortExams(student.program, student.semester, student.batch || '');
+  if (availableExams.length === 0) throw new Error('No active exams found for cohort');
+
+  // 2. Session start & assignment check (1 read, 1 write)
   const assignmentId = `${mockExam.id}_${uid}`;
   dbGetDoc('assignments', assignmentId);
 
@@ -222,17 +229,17 @@ async function simulateStudentExam(uid: string, studentIdx: number): Promise<Stu
     program: student.program,
   });
 
-  // 2. Real-time invigilator lock listener (1 initial read for onSnapshot)
+  // 3. Real-time invigilator lock listener (1 initial read for onSnapshot)
   telemetry.reads += 1;
 
-  // 3. Question Answering (50 MCQs answered locally in memory & saved to localStorage)
+  // 4. Question Answering (50 MCQs answered locally in memory & saved to localStorage)
   // Zero Firestore writes during 1-hour answering period!
   const simulatedAnswers: Record<string, number> = {};
   for (let qIdx = 0; qIdx < TOTAL_QUESTIONS; qIdx++) {
     const q = mockMasterQuestions[qIdx];
     // Realistic simulation: 80% passing accuracy across cohort
     const pickCorrect = (studentIdx + qIdx) % 5 !== 0;
-    const correctLetter = q.correctAnswer;
+    const correctLetter = String(q.correctAnswer);
     const correctIndex = correctLetter.charCodeAt(0) - 65;
     const chosenIndex = pickCorrect ? correctIndex : (correctIndex + 1) % 4;
 
@@ -240,7 +247,7 @@ async function simulateStudentExam(uid: string, studentIdx: number): Promise<Stu
     simulatedAnswers[q.id] = chosenIndex;
   }
 
-  // 4. Final Submission with new optimized submitExamAttempt
+  // 5. Final Submission with new optimized submitExamAttempt
   const submitStart = Date.now();
 
   // (a) Save submission to candidate assignment doc (1 write)
@@ -385,12 +392,6 @@ console.log('\n=================================================================
 console.log('TELEMETRY SUMMARY & BEFORE / AFTER COMPARISON');
 console.log('========================================================================');
 
-// Under the old system:
-// - Security rules: 80 students * 15 operations * 3 reads = ~3,600 reads
-// - 80 students * 50 questions query on submit = 4,000 reads
-// - getAllStudents() for whole college on every teacher visit = ~100-200 reads per load
-// - Uncached report clicks = hundreds of reads
-// Total Old Reads for 80 students would exceed 12,000+ reads!
 const estimatedOldReads = 3600 + (80 * 50) + 500 + 400; // ~8,500 - 12,000 reads
 
 console.log(`Old Architecture (Prior to optimizations):`);
@@ -432,4 +433,3 @@ console.log('===================================================================
 if (failedAssertions > 0) {
   process.exit(1);
 }
-
