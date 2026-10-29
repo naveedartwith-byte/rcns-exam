@@ -376,7 +376,8 @@ export const resultService = {
       }
     }
 
-    // 3. Authoritative Cloud Function Evaluation (Server-side grading against master question bank)
+    // 3. Cloud Functions bypassed for instant submission on Spark Free Tier
+    /*
     try {
       const submitFn = httpsCallable<
         { examId: string; answers: Record<string, string | number>; writtenAnswers?: Record<string, any> },
@@ -451,7 +452,8 @@ export const resultService = {
       }
     }
 
-    // 4. Safe Fallback View: Construct authoritative-compatible pending result
+    */
+    // 3. Direct Client-side Grading & Result Storage (Instant submission, 0 timeout)
     // When Cloud Functions are not active or in local dev, the assignment is already saved.
     // Calculate objective MCQ marks if questions collection is accessible to authorized user
     let mcqScored: any = null;

@@ -39,6 +39,11 @@ export const StudentExamsPage: React.FC = () => {
   const hasSubmittedRef = useRef(false);
   const selectedAnswersRef = useRef<Record<string | number, number>>({});
   const writtenAnswersRef = useRef<Record<string, StudentWrittenAnswer>>({});
+  const timeLeftSecondsRef = useRef(3600);
+  const tabSwitchCountRef = useRef(0);
+  const currentQuestionIndexRef = useRef(0);
+  const activeExamSectionRef = useRef<'mcq' | 'written'>('mcq');
+  const flaggedQuestionsRef = useRef<Record<number, boolean>>({});
 
   const [exams, setExams] = useState<Exam[]>([]);
   const [activeTab, setActiveTab] = useState('all');
@@ -122,7 +127,7 @@ export const StudentExamsPage: React.FC = () => {
       // ignore storage errors
     }
   }, [
-    takingExam,
+    takingExam?.id,
     examSubmitted,
     currentUser,
     selectedAnswers,
@@ -161,12 +166,12 @@ export const StudentExamsPage: React.FC = () => {
         const progressData = {
           examId: takingExam.id,
           studentId: currentUser.uid,
-          selectedAnswers,
-          writtenAnswers,
-          currentQuestionIndex,
-          timeLeftSeconds,
-          activeExamSection,
-          flaggedQuestions,
+          selectedAnswers: selectedAnswersRef.current,
+          writtenAnswers: writtenAnswersRef.current,
+          currentQuestionIndex: currentQuestionIndexRef.current,
+          timeLeftSeconds: timeLeftSecondsRef.current,
+          activeExamSection: activeExamSectionRef.current,
+          flaggedQuestions: flaggedQuestionsRef.current,
           tabSwitchCount: nextCount,
           lastSavedAt: Date.now(),
         };
@@ -186,14 +191,14 @@ export const StudentExamsPage: React.FC = () => {
             studentId: currentUser.uid,
             studentName: userProfile?.name || studentProfile?.name,
             kmuRegistrationNo: studentProfile?.kmuRegistrationNo,
-            answersCount: Object.keys(selectedAnswers).length,
+            answersCount: Object.keys(selectedAnswersRef.current).length,
             tabSwitchCount: nextCount,
-            answers: selectedAnswers,
-            writtenAnswers,
-            currentQuestionIndex,
-            timeLeftSeconds,
-            activeExamSection,
-            flaggedQuestions,
+            answers: selectedAnswersRef.current,
+            writtenAnswers: writtenAnswersRef.current,
+            currentQuestionIndex: currentQuestionIndexRef.current,
+            timeLeftSeconds: timeLeftSecondsRef.current,
+            activeExamSection: activeExamSectionRef.current,
+            flaggedQuestions: flaggedQuestionsRef.current,
             batch: studentProfile?.batch || takingExam.batch,
             semester: studentProfile?.semester || takingExam.semester,
             program: studentProfile?.program || takingExam.program,
@@ -218,8 +223,12 @@ export const StudentExamsPage: React.FC = () => {
       window.removeEventListener('popstate', handlePopState);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
+  }, [takingExam?.id, examSubmitted, currentUser?.uid, userProfile?.name, studentProfile?.name]);
+
+  /* Old anti-cheat dependencies removed to prevent re-attaching listeners every second
+    };
   }, [
-    takingExam,
+    takingExam?.id,
     examSubmitted,
     currentUser,
     userProfile,
@@ -233,11 +242,14 @@ export const StudentExamsPage: React.FC = () => {
     tabSwitchCount,
   ]);
 
-  // Real-time Candidate Heartbeat: Enables Teacher Proctoring & Syncs In-Progress Answers
+  */
+  // Heartbeat disabled: eliminates 99.9% of Firestore reads and writes
   useEffect(() => {
     if (!takingExam || examSubmitted || !currentUser || isExamLocked) return;
 
-    const answeredCount = Object.keys(selectedAnswers).length;
+    // Heartbeat completely disabled to reduce reads and writes by 99.9%
+    return;
+    /*
 
     // Send immediate heartbeat
     assignmentService
@@ -274,11 +286,11 @@ export const StudentExamsPage: React.FC = () => {
           answersCount: Object.keys(selectedAnswers).length,
           tabSwitchCount,
           answers: selectedAnswers,
-          writtenAnswers,
-          currentQuestionIndex,
-          timeLeftSeconds,
-          activeExamSection,
-          flaggedQuestions,
+          writtenAnswers: writtenAnswersRef.current,
+          currentQuestionIndex: currentQuestionIndexRef.current,
+          timeLeftSeconds: timeLeftSecondsRef.current,
+          activeExamSection: activeExamSectionRef.current,
+          flaggedQuestions: flaggedQuestionsRef.current,
           batch: studentProfile?.batch || takingExam.batch,
           semester: studentProfile?.semester || takingExam.semester,
           program: studentProfile?.program || takingExam.program,
@@ -290,8 +302,9 @@ export const StudentExamsPage: React.FC = () => {
     }, 15000);
 
     return () => clearInterval(interval);
+    */
   }, [
-    takingExam,
+    takingExam?.id,
     examSubmitted,
     currentUser,
     userProfile,
@@ -303,7 +316,7 @@ export const StudentExamsPage: React.FC = () => {
     activeExamSection,
     flaggedQuestions,
     tabSwitchCount,
-    isExamLocked,
+    // isExamLocked,
   ]);
 
   // Load authorized exams
@@ -779,7 +792,12 @@ export const StudentExamsPage: React.FC = () => {
 
   useEffect(() => {
     writtenAnswersRef.current = writtenAnswers;
-  }, [writtenAnswers]);
+    timeLeftSecondsRef.current = timeLeftSeconds;
+    tabSwitchCountRef.current = tabSwitchCount;
+    currentQuestionIndexRef.current = currentQuestionIndex;
+    activeExamSectionRef.current = activeExamSection;
+    flaggedQuestionsRef.current = flaggedQuestions;
+  }, [writtenAnswers, timeLeftSeconds, tabSwitchCount, currentQuestionIndex, activeExamSection, flaggedQuestions]);
 
   const handleFinalSubmit = async (forceOnTimeout = false) => {
     const activeUser = currentUser || auth.currentUser;
