@@ -44,7 +44,7 @@ service cloud.firestore {
            'teacher', 'Teacher', 'TEACHER', 'faculty', 'Faculty', 'FACULTY', 'instructor', 'Instructor'
          ]) ||
         (request.auth.token.role in [
-          'teacher', 'Teacher', 'TEACHER', 'faculty', 'Faculty', 'FACULTY', 'instructor', 'Instructor'
+           'teacher', 'Teacher', 'TEACHER', 'faculty', 'Faculty', 'FACULTY', 'instructor', 'Instructor'
         ]) ||
         (request.auth.token.email != null && !isStudent() && (
           request.auth.token.email.matches('(?i).*@royalcollege\\.edu\\.pk') ||
@@ -60,15 +60,20 @@ service cloud.firestore {
       );
     }
 
+    // Explicit test exam authorization: only approved test UIDs or trusted test role tokens
+    function isAuthorizedForTestExam(examId) {
+      return examId != 'exam-loadtest-100-live' ||
+             (request.auth.token.role == 'test_student' || request.auth.token.isLoadTestUser == true ||
+              (request.auth.token.email != null && request.auth.token.email.matches('(?i).*@rcns-test\\.internal')));
+    }
+
 
     // =========================================================================
     // USERS COLLECTION (Common identity metadata)
     // =========================================================================
     match /users/{userId} {
-      // User can read their own identity record; Admins can read all users; Teachers can read user names/emails
       allow read: if isOwner(userId) || isTeacher() || isAdmin();
       
-      // User can create their initial user doc on registration (student) or initial faculty setup; Admin can create any user doc
       allow create: if (isOwner(userId) && (
         request.resource.data.role == 'student' ||
         (request.resource.data.role in ['teacher', 'Teacher', 'TEACHER', 'faculty', 'Faculty', 'FACULTY', 'instructor', 'Instructor'] && (
@@ -80,10 +85,7 @@ service cloud.firestore {
         ))
       )) || isAdmin();
         
-      // User can update their own non-role fields; Admins can update any user doc
       allow update: if (isOwner(userId) && request.resource.data.role == resource.data.role) || isAdmin();
-      
-      // Only Admins can delete users
       allow delete: if isAdmin();
     }
 
@@ -91,16 +93,9 @@ service cloud.firestore {
     // STUDENTS COLLECTION
     // =========================================================================
     match /students/{studentId} {
-      // Student can read own profile; Teachers & Admins can read student profiles
       allow read: if isOwner(studentId) || isTeacher() || isAdmin();
-      
-      // Student can create their own student profile during registration
       allow create: if (isOwner(studentId) && request.resource.data.role == 'student') || isAdmin();
-      
-      // Student can update own profile (cannot change role); Admins can update
       allow update: if (isOwner(studentId) && request.resource.data.role == resource.data.role) || isAdmin();
-      
-      // Only Admins can delete student records
       allow delete: if isAdmin();
     }
 
@@ -108,16 +103,10 @@ service cloud.firestore {
     // KMU REGISTRATION UNIQUE REGISTRY
     // =========================================================================
     match /kmuRegistrations/{normalizedKmuReg} {
-      // Allow single document read for KMU login resolution and pre-registration check
       allow get: if true;
-      // Prevent unauthenticated scraping of all students
       allow list: if isAuthenticated() && (isTeacher() || isAdmin());
-      
-      // Created on registration by the authenticated owning user or administrator
       allow create: if isAuthenticated() &&
         (request.resource.data.uid == request.auth.uid || isAdmin());
-        
-      // Only Admin or the owning student can update/delete their KMU registration claim
       allow update, delete: if isAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid);
     }
 
@@ -133,10 +122,7 @@ service cloud.firestore {
     // TEACHERS COLLECTION
     // =========================================================================
     match /teachers/{teacherId} {
-      // Teachers can read own profile; Admins can read all; Students can read basic teacher info
       allow read: if isOwner(teacherId) || isAdmin() || isStudent();
-      
-      // Authorized teachers can initialize their own profile; Admins can create or delete any teacher
       allow create: if (isOwner(teacherId) && (
         isTeacher() ||
         (request.auth.token.email != null && (
@@ -145,8 +131,6 @@ service cloud.firestore {
         ))
       )) || isAdmin();
       allow delete: if isAdmin();
-      
-      // Teacher can update own profile; Admin can update any teacher
       allow update: if isOwner(teacherId) || isAdmin();
     }
 
@@ -154,7 +138,6 @@ service cloud.firestore {
     // ADMINS COLLECTION
     // =========================================================================
     match /admins/{adminId} {
-      // Users can check their own admin identity; Admins have full access
       allow read: if isOwner(adminId) || isAdmin();
       allow write: if isAdmin();
     }
@@ -163,7 +146,8 @@ service cloud.firestore {
     // EXAMS COLLECTION
     // =========================================================================
     match /exams/{examId} {
-      // Students can read scheduled/active exams; Teachers can read their own exams and institutional faculty seeded exams; Admins can read all
+      // Authoritative identifier is the document path key examId.
+      // Normal students cannot read or discover the test exam.
       allow read: if isAuthenticated() && (
         isAdmin() ||
         (isTeacher() && (
@@ -177,10 +161,13 @@ service cloud.firestore {
             request.auth.token.email.matches('(?i)dr\\.sanaullah@royalcollege\\.edu\\.pk')
           ))
         )) ||
-        (isStudent() && (resource.data.status in ['scheduled', 'active', 'completed']))
+        (
+          isStudent() &&
+          resource.data.status in ['scheduled', 'active', 'completed'] &&
+          isAuthorizedForTestExam(examId)
+        )
       );
       
-      // Teachers can create exams where teacherId matches their UID or email; Admins can create any exam
       allow create: if isAuthenticated() && (
         isAdmin() ||
         (isTeacher() && (
@@ -190,7 +177,6 @@ service cloud.firestore {
         ))
       );
       
-      // Teachers can update their own exams; Admins can update any exam
       allow update: if isAuthenticated() && (
         isAdmin() ||
         (isTeacher() && (
@@ -201,7 +187,6 @@ service cloud.firestore {
         ))
       );
       
-      // Teachers can delete their own draft exams; Admins can delete any exam
       allow delete: if isAdmin() || (isTeacher() && (
         resource.data.teacherId == request.auth.uid ||
         resource.data.teacherId == request.auth.token.email ||
@@ -213,9 +198,6 @@ service cloud.firestore {
     // EXAM SECRETS COLLECTION (Institutional Secret Exam Codes)
     // =========================================================================
     match /examSecrets/{examId} {
-      // ONLY Faculty and Admins can read or write secret exam codes.
-      // Students have ZERO read or write permission under all circumstances.
-      // Code verification is performed authoritatively on the server.
       allow read, write: if isAuthenticated() && (isAdmin() || isTeacher());
     }
 
@@ -230,8 +212,6 @@ service cloud.firestore {
     // EXAM CODE HASHES (Public Cryptographic Verification Tokens for Spark Tier)
     // =========================================================================
     match /examCodeHashes/{examId} {
-      // Contains ONLY cryptographic salt and SHA-256 hash. NEVER contains plaintext code.
-      // Authenticated students can read to verify their input without exposing code.
       allow read: if isAuthenticated();
       allow write: if isAuthenticated() && (isAdmin() || isTeacher());
     }
@@ -240,19 +220,15 @@ service cloud.firestore {
     // QUESTIONS COLLECTION (Protected Question Bank & Answer Keys)
     // =========================================================================
     match /questions/{questionId} {
-      // Master Question Bank & Answer Keys: Authenticated users can read to evaluate submissions directly;
-      // Faculty and Admins can create, update, or delete question documents.
-      allow read: if isAuthenticated();
-      allow write: if isAuthenticated() && (isAdmin() || isTeacher());
+      // ONLY Faculty and Admins can read or write master questions with answer keys.
+      // Students have ZERO read or write access under all circumstances.
+      allow read, write: if isAuthenticated() && (isAdmin() || isTeacher());
     }
 
     // =========================================================================
     // WRITTEN QUESTIONS COLLECTION (Protected Short & Long Questions & Rubrics)
     // =========================================================================
     match /writtenQuestions/{questionId} {
-      // Master Written Questions Bank & Rubrics: ONLY Faculty and Admins can read or write directly.
-      // Students NEVER receive raw written question documents with internal rubrics via Firestore client SDK.
-      // Students receive sanitized questions exclusively via exams/{examId}.sanitizedWrittenQuestions.
       allow read, write: if isAuthenticated() && (isAdmin() || isTeacher());
     }
 
@@ -260,16 +236,18 @@ service cloud.firestore {
     // ASSIGNMENTS COLLECTION
     // =========================================================================
     match /assignments/{assignmentId} {
-      // Student can read own assignments; Teachers & Admins can read all relevant assignments
       allow read: if isAuthenticated() && (
         isAdmin() ||
         isTeacher() ||
-        (isStudent() && resource.data.studentId == request.auth.uid)
+        (
+          isStudent() &&
+          resource.data.studentId == request.auth.uid &&
+          isAuthorizedForTestExam(resource.data.examId)
+        )
       );
       
-      // Teachers and Admins can assign exams to students;
-      // Students can initialize their own assignment attempt when starting or submitting an exam.
-      // Strict payload validation guarantees studentId, examId, status, and assignment authority.
+      // ONLY Teachers and Admins can create assignments.
+      // Students CANNOT create their own exam assignments.
       allow create: if isAuthenticated() && (
         isAdmin() ||
         (
@@ -283,23 +261,12 @@ service cloud.firestore {
            request.resource.data.assignedBy == request.auth.token.email ||
            request.resource.data.assignedBy in ['teacher-1', 'teacher-2', 'teacher-3', 'teacher-4', 'system-cohort-sync'] ||
            isAdmin())
-        ) ||
-        (
-          isStudent() &&
-          request.resource.data.studentId == request.auth.uid &&
-          request.resource.data.examId is string &&
-          request.resource.data.examId.size() > 0 &&
-          request.resource.data.status in ['assigned', 'started', 'submitted'] &&
-          !request.resource.data.keys().hasAny([
-            'marks', 'obtainedMarks', 'mcqMarks', 'writtenMarks',
-            'shortQuestionsMarks', 'longQuestionsMarks', 'grade',
-            'percentage', 'passed', 'evaluatedBy', 'writtenEvaluations', 'gradedAt'
-          ])
         )
       );
       
-      // Student can update their own in-progress assignment attempt without modifying immutable metadata or scoring fields;
-      // Teachers and Admins have full update access for assignment administration and grading
+      // Student can update only their own existing in-progress assignment attempt.
+      // Metadata (studentName, kmuRegistrationNo, examTitle, examType, subject, totalMarks, batch, semester, program)
+      // and codeVerified/codeVerifiedAt are STRICTLY IMMUTABLE and cannot be modified by students.
       allow update: if isAuthenticated() && (
         isAdmin() ||
         isTeacher() ||
@@ -308,21 +275,29 @@ service cloud.firestore {
           resource.data.studentId == request.auth.uid &&
           request.resource.data.studentId == resource.data.studentId &&
           request.resource.data.examId == resource.data.examId &&
-          resource.data.status in ['assigned', 'started', 'submitted'] &&
-          request.resource.data.status in ['started', 'submitted'] &&
-          (!('isLocked' in resource.data) || resource.data.isLocked != true || request.resource.data.status == 'submitted') &&
+          isAuthorizedForTestExam(resource.data.examId) &&
+          (!('assignedBy' in resource.data) || request.resource.data.assignedBy == resource.data.assignedBy) &&
+          (!('assignedAt' in resource.data) || request.resource.data.assignedAt == resource.data.assignedAt) &&
+          (!('studentName' in resource.data) || request.resource.data.studentName == resource.data.studentName) &&
+          (!('kmuRegistrationNo' in resource.data) || request.resource.data.kmuRegistrationNo == resource.data.kmuRegistrationNo) &&
+          (!('examTitle' in resource.data) || request.resource.data.examTitle == resource.data.examTitle) &&
+          (!('examType' in resource.data) || request.resource.data.examType == resource.data.examType) &&
+          (!('subject' in resource.data) || request.resource.data.subject == resource.data.subject) &&
+          (!('totalMarks' in resource.data) || request.resource.data.totalMarks == resource.data.totalMarks) &&
+          (!('batch' in resource.data) || request.resource.data.batch == resource.data.batch) &&
+          (!('semester' in resource.data) || request.resource.data.semester == resource.data.semester) &&
+          (!('program' in resource.data) || request.resource.data.program == resource.data.program) &&
+          ((resource.data.status == 'assigned' && request.resource.data.status in ['assigned', 'started']) ||
+           (resource.data.status == 'started' && request.resource.data.status in ['started', 'submitted'])) &&
+          (!('isLocked' in resource.data) || resource.data.isLocked != true) &&
           !request.resource.data.keys().hasAny([
             'marks', 'obtainedMarks', 'mcqMarks', 'writtenMarks',
             'shortQuestionsMarks', 'longQuestionsMarks', 'grade',
             'percentage', 'passed', 'evaluatedBy', 'writtenEvaluations', 'gradedAt',
-            'isLocked', 'lockedAt', 'lockedBy', 'lockedByName', 'lockedByRole', 'lockReason', 'lockAuditTrail'
+            'isLocked', 'lockedAt', 'lockedBy', 'lockedByName', 'lockedByRole', 'lockReason', 'lockAuditTrail',
+            'codeVerified', 'codeVerifiedAt'
           ]) &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            'id',
-            'examId',
-            'studentId',
-            'assignedBy',
-            'assignedAt',
             'answers',
             'answersCount',
             'writtenAnswers',
@@ -331,22 +306,11 @@ service cloud.firestore {
             'startedAt',
             'lastActiveAt',
             'submittedAt',
-            'studentName',
-            'kmuRegistrationNo',
-            'examTitle',
-            'examType',
-            'subject',
-            'totalMarks',
-            'batch',
-            'semester',
-            'program',
             'tabSwitchCount',
             'timeLeftSeconds',
             'currentQuestionIndex',
             'activeExamSection',
             'flaggedQuestions',
-            'codeVerified',
-            'codeVerifiedAt',
             'attemptId'
           ])
         )
@@ -359,7 +323,6 @@ service cloud.firestore {
     // EXAM LOCK AUDITS (Teacher/Admin Proctoring Audit Log)
     // =========================================================================
     match /examLockAudits/{auditId} {
-      // Only Faculty and Admins can read or write lock audit logs; students have zero access
       allow read, write: if isAuthenticated() && (isAdmin() || isTeacher());
     }
 
@@ -367,20 +330,19 @@ service cloud.firestore {
     // RESULTS COLLECTION (Authoritative Examination Records)
     // =========================================================================
     match /results/{resultId} {
-      // Student can read own results; Teachers & Admins can read all results
       allow read: if isAuthenticated() && (
         isAdmin() ||
         isTeacher() ||
-        (isStudent() && resource.data.studentId == request.auth.uid)
+        (
+          isStudent() &&
+          resource.data.studentId == request.auth.uid &&
+          isAuthorizedForTestExam(resource.data.examId)
+        )
       );
       
-      // Allow students to record their own calculated examination results upon submission;
-      // Teachers & Admins can create, update, or regrade any examination results.
-      allow create, update: if isAuthenticated() && (
-        isAdmin() ||
-        isTeacher() ||
-        (isStudent() && request.resource.data.studentId == request.auth.uid)
-      );
+      // ONLY authorized Teachers & Admins can publish or update official examination results.
+      // Students have ZERO create or update permission on the results collection.
+      allow create, update: if isAuthenticated() && (isAdmin() || isTeacher());
       allow delete: if isAuthenticated() && (isAdmin() || isTeacher());
     }
   }
