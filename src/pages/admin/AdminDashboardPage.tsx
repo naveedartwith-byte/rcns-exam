@@ -22,7 +22,7 @@ import { resultService } from '../../services/resultService';
 import { studentService } from '../../services/studentService';
 import { calculateCategoryPerformance } from '../../utils/academicAnalytics';
 import { StorageUsageCard } from '../../components/admin/StorageUsageCard';
-import type { AdminDashboardStats, ActivityItem } from '../../types/admin';
+import type { AdminDashboardStats } from '../../types/admin';
 import type { Exam } from '../../types/exam';
 import type { Result } from '../../types/result';
 import type { StudentProfile } from '../../types/student';
@@ -297,133 +297,59 @@ export const AdminDashboardPage: React.FC = () => {
       {/* Cloud Firestore Storage Usage & Capacity Indicator (ISSUE 4) */}
       <StorageUsageCard />
 
-      {/* Two Column Layout: Department Distribution + Recent Audit Log */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: '1.5rem' }}>
-        {/* Department Enrollment Breakdown */}
-        <Card>
-          <CardHeader>
-            <div>
-              <CardTitle>Department Enrollment Distribution</CardTitle>
-              <span style={{ fontSize: '0.8rem', color: 'var(--color-slate-500)' }}>
-                Active candidate registration across disciplines
-              </span>
-            </div>
-          </CardHeader>
+      {/* Department Enrollment Breakdown */}
+      <Card>
+        <CardHeader>
+          <div>
+            <CardTitle>Department Enrollment Distribution</CardTitle>
+            <span style={{ fontSize: '0.8rem', color: 'var(--color-slate-500)' }}>
+              Active candidate registration across disciplines
+            </span>
+          </div>
+        </CardHeader>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-            {departmentBreakdown.map((dept) => {
-              return (
-                <div key={dept.name} style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.85rem' }}>
-                    <span style={{ fontWeight: 600, color: 'var(--color-slate-800)' }}>{dept.name}</span>
-                    <span
-                      style={{
-                        color: dept.hasProgress ? 'var(--color-slate-700)' : 'var(--color-slate-400)',
-                        fontWeight: 700,
-                      }}
-                    >
-                      {dept.count} Students {dept.hasProgress ? `(${dept.percent}%)` : ''}
-                    </span>
-                  </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1.25rem' }}>
+          {departmentBreakdown.map((dept) => {
+            return (
+              <div key={dept.name} style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.85rem' }}>
+                  <span style={{ fontWeight: 600, color: 'var(--color-slate-800)' }}>{dept.name}</span>
+                  <span
+                    style={{
+                      color: dept.hasProgress ? 'var(--color-slate-700)' : 'var(--color-slate-400)',
+                      fontWeight: 700,
+                    }}
+                  >
+                    {dept.count} Students {dept.hasProgress ? `(${dept.percent}%)` : ''}
+                  </span>
+                </div>
 
-                  {dept.hasProgress && (
+                {dept.hasProgress && (
+                  <div
+                    style={{
+                      width: '100%',
+                      height: '8px',
+                      backgroundColor: 'var(--color-slate-100)',
+                      borderRadius: 'var(--radius-full)',
+                      overflow: 'hidden',
+                    }}
+                  >
                     <div
                       style={{
-                        width: '100%',
-                        height: '8px',
-                        backgroundColor: 'var(--color-slate-100)',
+                        width: `${dept.percent}%`,
+                        height: '100%',
+                        backgroundColor: dept.color,
                         borderRadius: 'var(--radius-full)',
-                        overflow: 'hidden',
+                        transition: 'width 0.4s ease',
                       }}
-                    >
-                      <div
-                        style={{
-                          width: `${dept.percent}%`,
-                          height: '100%',
-                          backgroundColor: dept.color,
-                          borderRadius: 'var(--radius-full)',
-                          transition: 'width 0.4s ease',
-                        }}
-                      />
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </Card>
-
-        {/* Recent Platform Activity Audit Log */}
-        <Card>
-          <CardHeader>
-            <div>
-              <CardTitle>System Activity &amp; Audit Trail</CardTitle>
-              <span style={{ fontSize: '0.8rem', color: 'var(--color-slate-500)' }}>
-                Real-time examination &amp; registration events
-              </span>
-            </div>
-          </CardHeader>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-            {stats.recentActivity.map((act: ActivityItem) => (
-              <div
-                key={act.id}
-                style={{
-                  display: 'flex',
-                  alignItems: 'flex-start',
-                  gap: '0.85rem',
-                  padding: '0.75rem',
-                  backgroundColor: 'var(--color-slate-50)',
-                  borderRadius: 'var(--radius-md)',
-                  border: '1px solid var(--color-slate-200)',
-                }}
-              >
-                <div
-                  style={{
-                    width: '32px',
-                    height: '32px',
-                    borderRadius: '50%',
-                    backgroundColor:
-                      act.type === 'registration'
-                        ? 'var(--color-primary-50)'
-                        : act.type === 'result'
-                        ? '#ecfdf5'
-                        : '#fef3c7',
-                    color:
-                      act.type === 'registration'
-                        ? 'var(--color-primary-800)'
-                        : act.type === 'result'
-                        ? '#047857'
-                        : '#b45309',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    flexShrink: 0,
-                    marginTop: '2px',
-                  }}
-                >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <circle cx="12" cy="12" r="10" />
-                    <polyline points="12 6 12 12 14 14" />
-                  </svg>
-                </div>
-
-                <div style={{ flex: 1 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div style={{ fontSize: '0.875rem', fontWeight: 700, color: 'var(--color-slate-900)' }}>
-                      {act.title}
-                    </div>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--color-slate-400)' }}>{act.time}</span>
+                    />
                   </div>
-                  <p style={{ fontSize: '0.8rem', color: 'var(--color-slate-600)', marginTop: '0.2rem', margin: 0 }}>
-                    {act.description}
-                  </p>
-                </div>
+                )}
               </div>
-            ))}
-          </div>
-        </Card>
-      </div>
+            );
+          })}
+        </div>
+      </Card>
 
       {/* College Examination Overview Master List */}
       <Card>

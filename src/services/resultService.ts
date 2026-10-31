@@ -1,7 +1,11 @@
+import { clearAdminDashboardStatsCache, clearStorageMetricsCache } from './adminService';
+
 let cachedAllResults: { list: Result[]; cachedAt: number } | null = null;
 
 export function clearAllResultsCache() {
   cachedAllResults = null;
+  clearAdminDashboardStatsCache();
+  clearStorageMetricsCache();
 }
 
 import {
@@ -694,6 +698,7 @@ export const resultService = {
       evaluatedBy: evaluatorUid || 'faculty-examiner',
       evaluatedAt: serverTimestamp(),
     });
+    clearAllResultsCache();
 
     // Update assignment status to graded only if fully graded
     if (status === 'graded') {

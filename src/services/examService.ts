@@ -12,6 +12,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '../firebase/firestore';
 import type { Exam } from '../types/exam';
+import { clearAdminDashboardStatsCache, clearStorageMetricsCache } from './adminService';
 
 function sortExamsNewestFirst(exams: Exam[]): Exam[] {
   return exams.sort((a, b) => {
@@ -79,7 +80,6 @@ export const examService = {
     return sortExamsNewestFirst(exams);
   },
 
-
   /**
    * Retrieves exams for a specific program and semester, sorted newest first.
    */
@@ -109,6 +109,9 @@ export const examService = {
       updatedAt: serverTimestamp(),
     });
 
+    clearAdminDashboardStatsCache();
+    clearStorageMetricsCache();
+
     return examRef.id;
   },
 
@@ -121,6 +124,9 @@ export const examService = {
       ...data,
       updatedAt: serverTimestamp(),
     });
+
+    clearAdminDashboardStatsCache();
+    clearStorageMetricsCache();
   },
 
   /**
@@ -165,6 +171,9 @@ export const examService = {
       chunk.forEach((ref) => batch.delete(ref));
       await batch.commit();
     }
+
+    clearAdminDashboardStatsCache();
+    clearStorageMetricsCache();
   },
 
   /**

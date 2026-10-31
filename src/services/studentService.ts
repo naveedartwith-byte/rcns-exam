@@ -1,8 +1,12 @@
+import { clearAdminDashboardStatsCache, clearStorageMetricsCache } from './adminService';
+
 // In-memory cache for student profiles to drastically reduce repeated Firestore reads
 let cachedAllStudents: { list: StudentProfile[]; cachedAt: number } | null = null;
 
 export function clearStudentProfilesCache() {
   cachedAllStudents = null;
+  clearAdminDashboardStatsCache();
+  clearStorageMetricsCache();
 }
 
 import {
@@ -55,6 +59,7 @@ export const studentService = {
       ...data,
       updatedAt: serverTimestamp(),
     });
+    clearStudentProfilesCache();
   },
 
   /**
@@ -216,6 +221,8 @@ export const studentService = {
         console.warn('Non-critical cascade update warning:', cascadeErr);
       }
     }
+
+    clearStudentProfilesCache();
   },
 
   /**
@@ -233,7 +240,7 @@ export const studentService = {
   },
 
   /**
-   * Queries students by program and semester.
+   * Retrieves students belonging to a specific program and semester.
    */
   async getStudentsByProgramAndSemester(program: string, semester: string): Promise<StudentProfile[]> {
     const studentsCol = collection(db, 'students');
@@ -296,8 +303,9 @@ export const studentService = {
       chunk.forEach((ref) => batch.delete(ref));
       await batch.commit();
     }
+
+    clearStudentProfilesCache();
   },
 };
 
 export default studentService;
-

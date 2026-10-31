@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Card, Badge, Button, LoadingSpinner } from '../ui';
 import { adminService } from '../../services/adminService';
-import { formatPakistanDateTime } from '../../utils/dateTime';
 import type { StorageMetrics } from '../../types/admin';
 
 function formatBytes(bytes: number, decimals: number = 2): string {
@@ -25,7 +24,7 @@ export const StorageUsageCard: React.FC = () => {
       else setLoading(true);
       setError(null);
 
-      const data = await adminService.getStorageMetrics();
+      const data = await adminService.getStorageMetrics(isManual);
       setMetrics(data);
     } catch (err: any) {
       console.error('Error fetching admin storage metrics:', err);
@@ -178,181 +177,60 @@ export const StorageUsageCard: React.FC = () => {
         </div>
       </div>
 
-      {/* Main Indicator Content Grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '2rem', alignItems: 'center' }}>
-        {/* Circular Progress Gauge */}
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-          <div style={{ position: 'relative', width: '160px', height: '160px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <svg width="160" height="160" viewBox="0 0 160 160" style={{ transform: 'rotate(-90deg)' }}>
-              {/* Background track circle */}
-              <circle
-                cx="80"
-                cy="80"
-                r={radius}
-                stroke="#e2e8f0"
-                strokeWidth="12"
-                fill="transparent"
-              />
-              {/* Animated Progress Circle */}
-              <circle
-                cx="80"
-                cy="80"
-                r={radius}
-                stroke={strokeColor}
-                strokeWidth="12"
-                strokeDasharray={circumference}
-                strokeDashoffset={strokeDashoffset}
-                strokeLinecap="round"
-                fill="transparent"
-                style={{
-                  transition: 'stroke-dashoffset 0.8s ease-in-out, stroke 0.3s ease',
-                }}
-              />
-            </svg>
-
-            {/* Inner text content */}
-            <div
+      {/* Circular Progress Gauge (Clean & Centered) */}
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '1rem 0' }}>
+        <div style={{ position: 'relative', width: '160px', height: '160px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <svg width="160" height="160" viewBox="0 0 160 160" style={{ transform: 'rotate(-90deg)' }}>
+            {/* Background track circle */}
+            <circle
+              cx="80"
+              cy="80"
+              r={radius}
+              stroke="#e2e8f0"
+              strokeWidth="12"
+              fill="transparent"
+            />
+            {/* Animated Progress Circle */}
+            <circle
+              cx="80"
+              cy="80"
+              r={radius}
+              stroke={strokeColor}
+              strokeWidth="12"
+              strokeDasharray={circumference}
+              strokeDashoffset={strokeDashoffset}
+              strokeLinecap="round"
+              fill="transparent"
               style={{
-                position: 'absolute',
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                justifyContent: 'center',
-                textAlign: 'center',
+                transition: 'stroke-dashoffset 0.8s ease-in-out, stroke 0.3s ease',
               }}
-            >
-              <span style={{ fontSize: '1.5rem', fontWeight: 900, color: 'var(--color-slate-900)', lineHeight: 1 }}>
-                {metrics.usagePercentage < 0.01 && metrics.usagePercentage > 0 ? '< 0.01%' : `${metrics.usagePercentage}%`}
-              </span>
-              <span style={{ fontSize: '0.72rem', color: 'var(--color-slate-500)', textTransform: 'uppercase', fontWeight: 700, marginTop: '0.2rem' }}>
-                Used Quota
-              </span>
-            </div>
-          </div>
+            />
+          </svg>
 
-          <div style={{ marginTop: '0.75rem', textAlign: 'center' }}>
-            <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-600)', fontWeight: 600 }}>
-              {formatBytes(metrics.usedBytes)} of {formatBytes(metrics.totalQuotaBytes)}
+          {/* Inner text content */}
+          <div
+            style={{
+              position: 'absolute',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              textAlign: 'center',
+            }}
+          >
+            <span style={{ fontSize: '1.6rem', fontWeight: 900, color: 'var(--color-slate-900)', lineHeight: 1 }}>
+              {metrics.usagePercentage < 0.01 && metrics.usagePercentage > 0 ? '< 0.01%' : `${metrics.usagePercentage}%`}
+            </span>
+            <span style={{ fontSize: '0.75rem', color: 'var(--color-slate-500)', textTransform: 'uppercase', fontWeight: 700, marginTop: '0.25rem' }}>
+              Used Quota
             </span>
           </div>
         </div>
 
-        {/* Metrics Breakdown Grid */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(2, 1fr)',
-              gap: '0.75rem',
-            }}
-          >
-            {/* Storage Used */}
-            <div
-              style={{
-                padding: '0.85rem',
-                borderRadius: 'var(--radius-md)',
-                backgroundColor: 'var(--color-slate-50)',
-                border: '1px solid var(--color-slate-200)',
-              }}
-            >
-              <div style={{ fontSize: '0.75rem', color: 'var(--color-slate-500)', textTransform: 'uppercase', fontWeight: 700 }}>
-                Storage Used
-              </div>
-              <div style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--color-slate-900)', marginTop: '0.2rem' }}>
-                {formatBytes(metrics.usedBytes)}
-              </div>
-              <div style={{ fontSize: '0.7rem', color: 'var(--color-slate-500)', marginTop: '0.1rem' }}>
-                Active Document Payload
-              </div>
-            </div>
-
-            {/* Remaining Storage */}
-            <div
-              style={{
-                padding: '0.85rem',
-                borderRadius: 'var(--radius-md)',
-                backgroundColor: '#f0fdf4',
-                border: '1px solid #bbf7d0',
-              }}
-            >
-              <div style={{ fontSize: '0.75rem', color: '#166534', textTransform: 'uppercase', fontWeight: 700 }}>
-                Remaining Storage
-              </div>
-              <div style={{ fontSize: '1.15rem', fontWeight: 800, color: '#15803d', marginTop: '0.2rem' }}>
-                {formatBytes(metrics.remainingBytes)}
-              </div>
-              <div style={{ fontSize: '0.7rem', color: '#166534', marginTop: '0.1rem' }}>
-                Available Free Capacity
-              </div>
-            </div>
-
-            {/* Total Quota */}
-            <div
-              style={{
-                padding: '0.85rem',
-                borderRadius: 'var(--radius-md)',
-                backgroundColor: 'var(--color-slate-50)',
-                border: '1px solid var(--color-slate-200)',
-              }}
-            >
-              <div style={{ fontSize: '0.75rem', color: 'var(--color-slate-500)', textTransform: 'uppercase', fontWeight: 700 }}>
-                Total Allocated Quota
-              </div>
-              <div style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--color-slate-900)', marginTop: '0.2rem' }}>
-                {formatBytes(metrics.totalQuotaBytes)}
-              </div>
-              <div style={{ fontSize: '0.7rem', color: 'var(--color-slate-500)', marginTop: '0.1rem' }}>
-                Cloud Firestore Spark Tier
-              </div>
-            </div>
-
-            {/* Document Footprint */}
-            <div
-              style={{
-                padding: '0.85rem',
-                borderRadius: 'var(--radius-md)',
-                backgroundColor: 'var(--color-slate-50)',
-                border: '1px solid var(--color-slate-200)',
-              }}
-            >
-              <div style={{ fontSize: '0.75rem', color: 'var(--color-slate-500)', textTransform: 'uppercase', fontWeight: 700 }}>
-                Total Stored Records
-              </div>
-              <div style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--color-slate-900)', marginTop: '0.2rem' }}>
-                {metrics.documentCount || 0}
-              </div>
-              <div style={{ fontSize: '0.7rem', color: 'var(--color-slate-500)', marginTop: '0.1rem' }}>
-                Documents in Registry
-              </div>
-            </div>
-          </div>
-
-          {/* Source Notice & Last Updated */}
-          <div
-            style={{
-              padding: '0.65rem 0.85rem',
-              borderRadius: 'var(--radius-sm)',
-              backgroundColor: '#eff6ff',
-              border: '1px solid #bfdbfe',
-              fontSize: '0.78rem',
-              color: '#1e40af',
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              flexWrap: 'wrap',
-              gap: '0.4rem',
-            }}
-          >
-            <span>
-              ℹ️ Source:{' '}
-              <strong>
-                {metrics.source === 'live_telemetry' ? 'Cloud Monitoring Telemetry' : 'Calculated Collection Footprint (Estimate)'}
-              </strong>
-            </span>
-            <span style={{ color: '#3b82f6' }}>
-              Last Verified: {formatPakistanDateTime(metrics.lastUpdated)}
-            </span>
-          </div>
+        <div style={{ marginTop: '0.85rem', textAlign: 'center' }}>
+          <span style={{ fontSize: '0.85rem', color: 'var(--color-slate-600)', fontWeight: 600 }}>
+            {formatBytes(metrics.usedBytes)} of {formatBytes(metrics.totalQuotaBytes)}
+          </span>
         </div>
       </div>
     </Card>

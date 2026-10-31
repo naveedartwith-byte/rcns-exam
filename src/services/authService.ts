@@ -17,6 +17,7 @@ import { auth } from '../firebase/auth';
 import { db } from '../firebase/firestore';
 import type { StudentRegistrationData } from '../types/auth';
 import { normalizeKmuRegistration, generateKmuLookupCandidates } from '../utils/kmuRegistration';
+import { clearStudentProfilesCache } from './studentService';
 
 /**
  * Authentication Service Module
@@ -180,6 +181,7 @@ export const authService = {
       });
 
       await batch.commit();
+      clearStudentProfilesCache();
       console.log('[Registration Step 3 Success] Firestore batch committed successfully.');
 
       // 4. Sign out immediately so user is not auto-logged in
