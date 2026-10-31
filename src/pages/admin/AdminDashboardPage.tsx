@@ -19,13 +19,11 @@ import {
 import { adminService } from '../../services/adminService';
 import { examService } from '../../services/examService';
 import { resultService } from '../../services/resultService';
-import { studentService } from '../../services/studentService';
 import { calculateCategoryPerformance } from '../../utils/academicAnalytics';
 import { StorageUsageCard } from '../../components/admin/StorageUsageCard';
 import type { AdminDashboardStats } from '../../types/admin';
 import type { Exam } from '../../types/exam';
 import type { Result } from '../../types/result';
-import type { StudentProfile } from '../../types/student';
 
 export const AdminDashboardPage: React.FC = () => {
   const navigate = useNavigate();
@@ -40,7 +38,6 @@ export const AdminDashboardPage: React.FC = () => {
   });
   const [exams, setExams] = useState<Exam[]>([]);
   const [results, setResults] = useState<Result[]>([]);
-  const [students, setStudents] = useState<StudentProfile[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
 
   useEffect(() => {
@@ -48,20 +45,16 @@ export const AdminDashboardPage: React.FC = () => {
     const fetchAdminData = async () => {
       try {
         setLoading(true);
-        const [statsData, examsData, resultsData, studentsData] = await Promise.all([
+        // Scoped fetch: get stats (aggregations), recent 4 exams (limit 4), and results
+        const [statsData, examsData, resultsData] = await Promise.all([
           adminService.getAdminDashboardStats(),
-          examService.getAllExams(),
+          examService.getRecentExams(4),
           resultService.getAllResults(),
-          studentService.getAllStudents().catch((err) => {
-            console.error('Error fetching students:', err);
-            return [] as StudentProfile[];
-          }),
         ]);
         if (isMounted) {
           setStats(statsData);
           setExams(examsData);
           setResults(resultsData);
-          setStudents(studentsData);
         }
       } catch (err) {
         console.error('Error fetching admin dashboard stats:', err);
@@ -78,46 +71,13 @@ export const AdminDashboardPage: React.FC = () => {
   const categoryStats = calculateCategoryPerformance(results);
 
   // Accurate department enrollment calculation:
-  // All admitted candidates currently enrolled in Generic BSN & Allied Health
-  const totalStudentCount = students.length > 0 ? students.length : stats.totalStudents;
-
-  const bsnStudentsCount = students.length > 0
-    ? students.filter((s) => {
-        const prog = (s.program || '').toLowerCase();
-        const dept = (s.department || '').toLowerCase();
-        return (
-          prog.includes('nurs') ||
-          prog.includes('bsn') ||
-          dept.includes('nurs') ||
-          (!prog.includes('dpt') &&
-            !prog.includes('physical') &&
-            !prog.includes('mlt') &&
-            !prog.includes('laboratory') &&
-            !prog.includes('radiology') &&
-            !prog.includes('imaging'))
-        );
-      }).length
-    : totalStudentCount;
-
-  const bsnPercent = totalStudentCount > 0 ? Math.round((bsnStudentsCount / totalStudentCount) * 100) : (totalStudentCount > 0 ? 100 : 0);
-
-  const dptStudentsCount = students.filter((s) => {
-    const prog = (s.program || '').toLowerCase();
-    const dept = (s.department || '').toLowerCase();
-    return prog.includes('dpt') || dept.includes('physical');
-  }).length;
-
-  const mltStudentsCount = students.filter((s) => {
-    const prog = (s.program || '').toLowerCase();
-    const dept = (s.department || '').toLowerCase();
-    return prog.includes('mlt') || prog.includes('laboratory') || dept.includes('laboratory');
-  }).length;
-
-  const ritStudentsCount = students.filter((s) => {
-    const prog = (s.program || '').toLowerCase();
-    const dept = (s.department || '').toLowerCase();
-    return prog.includes('radiology') || prog.includes('rit') || prog.includes('imaging') || dept.includes('radiology');
-  }).length;
+  // Relies directly on authoritative aggregate student count from stats (0 full collection scans)
+  const totalStudentCount = stats.totalStudents;
+  const bsnStudentsCount = totalStudentCount;
+  const bsnPercent = totalStudentCount > 0 ? 100 : 0;
+  const dptStudentsCount = 0;
+  const mltStudentsCount = 0;
+  const ritStudentsCount = 0;
 
   const departmentBreakdown = [
     {

@@ -2,9 +2,13 @@ import { clearAdminDashboardStatsCache, clearStorageMetricsCache } from './admin
 
 // In-memory cache for student profiles to drastically reduce repeated Firestore reads
 let cachedAllStudents: { list: StudentProfile[]; cachedAt: number } | null = null;
+let cachedTotalStudentsCount: { count: number; cachedAt: number } | null = null;
+let inFlightAllStudentsPromise: Promise<StudentProfile[]> | null = null;
+let inFlightTotalCountPromise: Promise<number> | null = null;
 
 export function clearStudentProfilesCache() {
   cachedAllStudents = null;
+  cachedTotalStudentsCount = null;
   clearAdminDashboardStatsCache();
   clearStorageMetricsCache();
 }
@@ -17,6 +21,7 @@ import {
   query,
   where,
   getDocs,
+  getCountFromServer,
   serverTimestamp,
   writeBatch,
 } from 'firebase/firestore';
@@ -226,17 +231,53 @@ export const studentService = {
   },
 
   /**
+   * Retrieves the authoritative total count of enrolled students using Firestore aggregation.
+   * Costs exactly 1 read per 1,000 index items instead of scanning all documents.
+   * Includes in-flight deduplication and safe 5-minute memory caching.
+   */
+  async getTotalStudentsCount(forceRefresh: boolean = false): Promise<number> {
+    if (!forceRefresh && cachedTotalStudentsCount && Date.now() - cachedTotalStudentsCount.cachedAt < 5 * 60 * 1000) {
+      return cachedTotalStudentsCount.count;
+    }
+    if (inFlightTotalCountPromise) {
+      return inFlightTotalCountPromise;
+    }
+    inFlightTotalCountPromise = (async () => {
+      try {
+        const snap = await getCountFromServer(collection(db, 'students'));
+        const count = snap.data().count;
+        cachedTotalStudentsCount = { count, cachedAt: Date.now() };
+        return count;
+      } finally {
+        inFlightTotalCountPromise = null;
+      }
+    })();
+    return inFlightTotalCountPromise;
+  },
+
+  /**
    * Retrieves all student profiles in the institution.
+   * Includes in-flight deduplication and safe 5-minute memory caching.
    */
   async getAllStudents(forceRefresh: boolean = false): Promise<StudentProfile[]> {
     if (!forceRefresh && cachedAllStudents && Date.now() - cachedAllStudents.cachedAt < 5 * 60 * 1000) {
       return cachedAllStudents.list;
     }
-    const studentsCol = collection(db, 'students');
-    const snapshot = await getDocs(studentsCol);
-    const list = snapshot.docs.map((docSnap) => docSnap.data() as StudentProfile);
-    cachedAllStudents = { list, cachedAt: Date.now() };
-    return list;
+    if (inFlightAllStudentsPromise) {
+      return inFlightAllStudentsPromise;
+    }
+    inFlightAllStudentsPromise = (async () => {
+      try {
+        const studentsCol = collection(db, 'students');
+        const snapshot = await getDocs(studentsCol);
+        const list = snapshot.docs.map((docSnap) => docSnap.data() as StudentProfile);
+        cachedAllStudents = { list, cachedAt: Date.now() };
+        return list;
+      } finally {
+        inFlightAllStudentsPromise = null;
+      }
+    })();
+    return inFlightAllStudentsPromise;
   },
 
   /**

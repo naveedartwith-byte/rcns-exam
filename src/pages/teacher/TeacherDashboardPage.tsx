@@ -39,15 +39,20 @@ export const TeacherDashboardPage: React.FC = () => {
     const fetchTeacherData = async () => {
       try {
         if (currentUser) {
-          const [exams, students, allResults] = await Promise.all([
-            examService.getExamsByTeacher(currentUser.uid),
-            studentService.getAllStudents(),
-            resultService.getAllResults(),
+          const [exams, studentCount] = await Promise.all([
+            examService.getExamsByTeacher(currentUser.uid, currentUser.email || undefined),
+            studentService.getTotalStudentsCount(),
           ]);
+
+          const examIds = exams.map((e) => e.id);
+          const teacherResults = examIds.length > 0
+            ? await resultService.getResultsByExamIds(examIds)
+            : [];
+
           if (isMounted) {
             setTeacherExams(exams);
-            setTotalStudents(students.length);
-            setResults(allResults);
+            setTotalStudents(studentCount);
+            setResults(teacherResults);
           }
         }
       } catch (err) {
@@ -60,10 +65,7 @@ export const TeacherDashboardPage: React.FC = () => {
     };
   }, [currentUser]);
 
-  const teacherExamIds = new Set(teacherExams.map((e) => e.id));
-  const relevantResults = results.filter((r) => teacherExamIds.has(r.examId));
-  const statsResults = relevantResults.length > 0 ? relevantResults : results;
-  const categoryStats = calculateCategoryPerformance(statsResults);
+  const categoryStats = calculateCategoryPerformance(results);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.75rem' }}>

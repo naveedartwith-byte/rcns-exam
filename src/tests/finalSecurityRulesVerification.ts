@@ -73,7 +73,7 @@ function evaluateAssignmentUpdate(
   const isTeacher = auth.token?.role === 'teacher';
   if (isAdmin || isTeacher) return { allowed: true };
 
-  const isStudent = auth.token?.role === 'student';
+  const isStudent = auth.token?.role === 'student' || auth.token?.role === 'test_student';
   if (!isStudent) return { allowed: false, reason: 'Not student or faculty' };
 
   // Rule line 308: resource.data.studentId == request.auth.uid
@@ -191,7 +191,7 @@ function evaluateAssignmentUpdate(
 function evaluateExamRead(auth: RequestAuth | null, examId: string, examStatus: string): boolean {
   if (!auth) return false;
   if (auth.token?.role === 'admin' || auth.token?.role === 'teacher') return true;
-  if (auth.token?.role === 'student') {
+  if (auth.token?.role === 'student' || auth.token?.role === 'test_student') {
     return ['scheduled', 'active', 'completed'].includes(examStatus) && isAuthorizedForTestExam(auth, examId);
   }
   return false;

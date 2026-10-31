@@ -1,9 +1,13 @@
 import { clearAdminDashboardStatsCache, clearStorageMetricsCache } from './adminService';
 
 let cachedAllResults: { list: Result[]; cachedAt: number } | null = null;
+const cachedResultsByExamScope = new Map<string, { list: Result[]; cachedAt: number }>();
+let inFlightAllResultsPromise: Promise<Result[]> | null = null;
+const inFlightResultsByExamScope = new Map<string, Promise<Result[]>>();
 
 export function clearAllResultsCache() {
   cachedAllResults = null;
+  cachedResultsByExamScope.clear();
   clearAdminDashboardStatsCache();
   clearStorageMetricsCache();
 }
@@ -259,18 +263,88 @@ export const resultService = {
   },
 
   /**
+   * Retrieves results scoped strictly to a specific list of exam IDs (e.g. authored by a teacher).
+   * Safely chunks requests to adhere to Firestore's 30-element 'in' query limit.
+   * If examIds is empty, returns immediately with 0 Firestore reads.
+   * Includes in-flight deduplication and safe 3-minute memory caching.
+   */
+  async getResultsByExamIds(examIds: string[], forceRefresh: boolean = false): Promise<Result[]> {
+    if (!examIds || examIds.length === 0) {
+      return [];
+    }
+
+    const uniqueExamIds = Array.from(new Set(examIds.filter(Boolean)));
+    if (uniqueExamIds.length === 0) {
+      return [];
+    }
+
+    const cacheKey = uniqueExamIds.slice().sort().join(',');
+    if (!forceRefresh && cachedResultsByExamScope.has(cacheKey)) {
+      const entry = cachedResultsByExamScope.get(cacheKey)!;
+      if (Date.now() - entry.cachedAt < 3 * 60 * 1000) {
+        return entry.list;
+      }
+    }
+
+    if (inFlightResultsByExamScope.has(cacheKey)) {
+      return inFlightResultsByExamScope.get(cacheKey)!;
+    }
+
+    const fetchPromise = (async () => {
+      try {
+        const resultsCol = collection(db, 'results');
+        const chunks: string[][] = [];
+        for (let i = 0; i < uniqueExamIds.length; i += 30) {
+          chunks.push(uniqueExamIds.slice(i, i + 30));
+        }
+
+        const snapshots = await Promise.all(
+          chunks.map((chunk) => getDocs(query(resultsCol, where('examId', 'in', chunk))))
+        );
+
+        const combined: Result[] = [];
+        snapshots.forEach((snap) => {
+          snap.docs.forEach((d) => {
+            combined.push({ id: d.id, ...d.data() } as Result);
+          });
+        });
+
+        const sorted = sortResultsNewestFirst(combined);
+        cachedResultsByExamScope.set(cacheKey, { list: sorted, cachedAt: Date.now() });
+        return sorted;
+      } finally {
+        inFlightResultsByExamScope.delete(cacheKey);
+      }
+    })();
+
+    inFlightResultsByExamScope.set(cacheKey, fetchPromise);
+    return fetchPromise;
+  },
+
+  /**
    * Retrieves all results across the institution (Admin view), sorted newest first.
+   * Includes in-flight deduplication and safe 3-minute memory caching.
    */
   async getAllResults(forceRefresh: boolean = false): Promise<Result[]> {
     if (!forceRefresh && cachedAllResults && Date.now() - cachedAllResults.cachedAt < 3 * 60 * 1000) {
       return cachedAllResults.list;
     }
-    const resultsCol = collection(db, 'results');
-    const snapshot = await getDocs(resultsCol);
-    const results = snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Result));
-    const sorted = sortResultsNewestFirst(results);
-    cachedAllResults = { list: sorted, cachedAt: Date.now() };
-    return sorted;
+    if (inFlightAllResultsPromise) {
+      return inFlightAllResultsPromise;
+    }
+    inFlightAllResultsPromise = (async () => {
+      try {
+        const resultsCol = collection(db, 'results');
+        const snapshot = await getDocs(resultsCol);
+        const results = snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Result));
+        const sorted = sortResultsNewestFirst(results);
+        cachedAllResults = { list: sorted, cachedAt: Date.now() };
+        return sorted;
+      } finally {
+        inFlightAllResultsPromise = null;
+      }
+    })();
+    return inFlightAllResultsPromise;
   },
 
   /**

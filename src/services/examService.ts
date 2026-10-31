@@ -7,12 +7,17 @@ import {
   query,
   where,
   getDocs,
+  orderBy,
+  limit,
   serverTimestamp,
   writeBatch,
 } from 'firebase/firestore';
 import { db } from '../firebase/firestore';
 import type { Exam } from '../types/exam';
 import { clearAdminDashboardStatsCache, clearStorageMetricsCache } from './adminService';
+
+let inFlightRecentExamsPromise: Promise<Exam[]> | null = null;
+let inFlightAllExamsPromise: Promise<Exam[]> | null = null;
 
 function sortExamsNewestFirst(exams: Exam[]): Exam[] {
   return exams.sort((a, b) => {
@@ -44,13 +49,64 @@ export const examService = {
   },
 
   /**
+   * Retrieves the most recent N exams across the institution for overview cards/tables.
+   * Utilizes limit() to avoid scanning the entire examination registry.
+   * Includes in-flight deduplication.
+   */
+  async getRecentExams(limitCount: number = 4): Promise<Exam[]> {
+    if (inFlightRecentExamsPromise) {
+      return inFlightRecentExamsPromise;
+    }
+
+    inFlightRecentExamsPromise = (async () => {
+      try {
+        const examsCol = collection(db, 'exams');
+        try {
+          const q = query(examsCol, orderBy('createdAt', 'desc'), limit(limitCount));
+          const snapshot = await getDocs(q);
+          const list = snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Exam));
+          if (list.length > 0) {
+            return sortExamsNewestFirst(list);
+          }
+        } catch (orderErr) {
+          console.warn('[getRecentExams] Direct orderBy fallback:', orderErr);
+        }
+
+        // Fallback with simple limit if index or createdAt field is pending
+        const qFallback = query(examsCol, limit(limitCount));
+        const fbSnap = await getDocs(qFallback);
+        const fbList = fbSnap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Exam));
+        return sortExamsNewestFirst(fbList);
+      } finally {
+        inFlightRecentExamsPromise = null;
+      }
+    })();
+
+    return inFlightRecentExamsPromise;
+  },
+
+  /**
    * Retrieves all exams across the institution, sorted newest first.
+   * Preserves complete examination registry functionality.
+   * Includes in-flight deduplication.
    */
   async getAllExams(): Promise<Exam[]> {
-    const examsCol = collection(db, 'exams');
-    const snapshot = await getDocs(examsCol);
-    const list = snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Exam));
-    return sortExamsNewestFirst(list);
+    if (inFlightAllExamsPromise) {
+      return inFlightAllExamsPromise;
+    }
+
+    inFlightAllExamsPromise = (async () => {
+      try {
+        const examsCol = collection(db, 'exams');
+        const snapshot = await getDocs(examsCol);
+        const list = snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Exam));
+        return sortExamsNewestFirst(list);
+      } finally {
+        inFlightAllExamsPromise = null;
+      }
+    })();
+
+    return inFlightAllExamsPromise;
   },
 
   /**
