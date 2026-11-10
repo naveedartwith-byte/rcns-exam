@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
 import { Logo, Input, Select, Button, Alert, Checkbox, KmuRegistrationInput } from '../../components/ui';
-import { isValidKmuRegistration } from '../../utils/kmuRegistration';
+import { isValidKmuRegistration, generateKmuEmail } from '../../utils/kmuRegistration';
 import { MOCK_PROGRAMS, MOCK_BATCHES, MOCK_SEMESTERS } from '../../mock/mockData';
 
 export const RegisterStudentPage: React.FC = () => {
@@ -12,7 +12,6 @@ export const RegisterStudentPage: React.FC = () => {
   const [formData, setFormData] = useState({
     name: '',
     fatherName: '',
-    email: '',
     password: '',
     confirmPassword: '',
     kmuRegistrationNo: '',
@@ -50,7 +49,7 @@ export const RegisterStudentPage: React.FC = () => {
     setErrorMessage(null);
 
     // Frontend Validations
-    if (!formData.name.trim() || !formData.fatherName.trim() || !formData.email.trim() || !formData.password) {
+    if (!formData.name.trim() || !formData.fatherName.trim() || !formData.password) {
       setErrorMessage('Please fill in all required academic registration fields.');
       return;
     }
@@ -87,8 +86,9 @@ export const RegisterStudentPage: React.FC = () => {
 
     setIsLoading(true);
     try {
+      const autoGenEmail = generateKmuEmail(formData.kmuRegistrationNo.trim());
       await registerStudent({
-        email: formData.email.trim(),
+        email: autoGenEmail,
         password: formData.password,
         name: formData.name.trim(),
         fatherName: formData.fatherName.trim(),
@@ -103,9 +103,9 @@ export const RegisterStudentPage: React.FC = () => {
     } catch (err: unknown) {
       const error = err as { code?: string; message?: string };
       if (error.code === 'auth/email-already-in-use') {
-        setErrorMessage('This email address is already registered. Please sign in or use another email.');
+        setErrorMessage('This KMU Registration Number is already registered. Please sign in with your KMU Registration Number.');
       } else if (error.code === 'auth/invalid-email') {
-        setErrorMessage('Please provide a valid institutional email address format.');
+        setErrorMessage('Invalid KMU Registration format.');
       } else if (error.code === 'auth/weak-password') {
         setErrorMessage('Password must be at least 6 characters long.');
       } else {
@@ -227,15 +227,6 @@ export const RegisterStudentPage: React.FC = () => {
                 </span>
                 <div style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--color-slate-900)' }}>
                   {formData.semester}
-                </div>
-              </div>
-
-              <div style={{ gridColumn: 'span 2' }}>
-                <span style={{ fontSize: '0.75rem', color: 'var(--color-slate-500)', textTransform: 'uppercase', fontWeight: 600 }}>
-                  Formal / Profile Email
-                </span>
-                <div style={{ fontSize: '0.9rem', color: 'var(--color-slate-700)' }}>
-                  {formData.email} <span style={{ fontSize: '0.75rem', color: 'var(--color-slate-500)' }}>(Recorded for profile information only)</span>
                 </div>
               </div>
             </div>
@@ -371,45 +362,32 @@ export const RegisterStudentPage: React.FC = () => {
                 </div>
               </div>
 
-              {/* Section 3: Account Credentials & Formal Email */}
+              {/* Section 3: Account Password */}
               <div>
                 <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--color-slate-800)', borderBottom: '1px solid var(--color-slate-100)', paddingBottom: '0.5rem', marginBottom: '1rem' }}>
-                  3. Contact Information &amp; Password
+                  3. Account Password
                 </h3>
 
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
                   <Input
-                    label="Formal / Profile Email Address"
-                    type="email"
-                    placeholder="e.g. farhan.student@royalcollege.edu.pk"
-                    helperText="Collected for academic profile records only (Not used for student login)"
-                    value={formData.email}
-                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                    label="Create Password"
+                    type="password"
+                    placeholder="At least 6 characters"
+                    value={formData.password}
+                    onChange={(e) => setFormData({ ...formData, password: e.target.value })}
                     required
                     requiredIndicator
                   />
 
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
-                    <Input
-                      label="Create Password"
-                      type="password"
-                      placeholder="At least 6 characters"
-                      value={formData.password}
-                      onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                      required
-                      requiredIndicator
-                    />
-
-                    <Input
-                      label="Confirm Password"
-                      type="password"
-                      placeholder="Repeat password"
-                      value={formData.confirmPassword}
-                      onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
-                      required
-                      requiredIndicator
-                    />
-                  </div>
+                  <Input
+                    label="Confirm Password"
+                    type="password"
+                    placeholder="Repeat password"
+                    value={formData.confirmPassword}
+                    onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
+                    required
+                    requiredIndicator
+                  />
                 </div>
               </div>
 

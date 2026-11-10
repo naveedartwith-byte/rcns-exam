@@ -105,48 +105,53 @@ export const resultService = {
   async getResultsByStudentId(studentId: string): Promise<Result[]> {
     if (!studentId) return [];
 
-    const resultsCol = collection(db, 'results');
-    const q = query(resultsCol, where('studentId', '==', studentId));
-    const snapshot = await getDocs(q);
-    const finalizedResults = snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Result));
+    let finalizedResults: Result[] = [];
+    try {
+      const resultsCol = collection(db, 'results');
+      const q = query(resultsCol, where('studentId', '==', studentId));
+      const snapshot = await getDocs(q);
+      finalizedResults = snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Result));
 
-    // Re-evaluate and repair any previously stored results that have 0 marks or 0% due to legacy key mismatches
-    for (const r of finalizedResults) {
-      if (Number(r.marks) === 0 || Number(r.percentage) === 0 || !r.correctCount) {
-        let studentAnswers = r.answers;
-        if (!studentAnswers || Object.keys(studentAnswers).length === 0) {
-          const aSnap = await getDoc(doc(db, 'assignments', `${r.examId}_${studentId}`)).catch(() => null);
-          if (aSnap?.exists()) {
-            studentAnswers = aSnap.data()?.answers;
+      // Re-evaluate and repair any previously stored results that have 0 marks or 0% due to legacy key mismatches
+      for (const r of finalizedResults) {
+        if (Number(r.marks) === 0 || Number(r.percentage) === 0 || !r.correctCount) {
+          let studentAnswers = r.answers;
+          if (!studentAnswers || Object.keys(studentAnswers).length === 0) {
+            const aSnap = await getDoc(doc(db, 'assignments', `${r.examId}_${studentId}`)).catch(() => null);
+            if (aSnap?.exists()) {
+              studentAnswers = aSnap.data()?.answers;
+            }
           }
-        }
-        if (studentAnswers && Object.keys(studentAnswers).length > 0) {
-          const examSnap = await getDoc(doc(db, 'exams', r.examId)).catch(() => null);
-          const examData = examSnap?.exists() ? examSnap.data() : null;
-          const masterQs = await getMasterQuestionsForExam(r.examId, examData);
-          if (masterQs.length > 0) {
-            const scored = gradeExamSubmission(masterQs, studentAnswers, examData?.passingMarks);
-            if (scored.obtainedMarks > 0 || scored.answersCount > 0) {
-              r.marks = scored.obtainedMarks;
-              r.totalMarks = scored.totalMarks || r.totalMarks;
-              r.percentage = scored.percentage;
-              r.passed = scored.passed;
-              r.grade = scored.grade || calculateKmuGrade(scored.percentage);
-              r.status = 'graded';
-              r.mcqMarks = scored.obtainedMarks;
-              r.mcqTotalMarks = scored.totalMarks;
-              r.correctCount = scored.correctCount;
-              r.correctMCQs = scored.correctCount;
-              r.answeredMCQs = scored.answersCount;
-              r.incorrectMCQs = Math.max(0, scored.answersCount - scored.correctCount);
-              r.totalMCQs = masterQs.length;
-              r.totalQuestions = masterQs.length;
-              if (!r.answers) r.answers = studentAnswers;
-              setDoc(doc(db, 'results', r.id), r, { merge: true }).catch(() => {});
+          if (studentAnswers && Object.keys(studentAnswers).length > 0) {
+            const examSnap = await getDoc(doc(db, 'exams', r.examId)).catch(() => null);
+            const examData = examSnap?.exists() ? examSnap.data() : null;
+            const masterQs = await getMasterQuestionsForExam(r.examId, examData);
+            if (masterQs.length > 0) {
+              const scored = gradeExamSubmission(masterQs, studentAnswers, examData?.passingMarks);
+              if (scored.obtainedMarks > 0 || scored.answersCount > 0) {
+                r.marks = scored.obtainedMarks;
+                r.totalMarks = scored.totalMarks || r.totalMarks;
+                r.percentage = scored.percentage;
+                r.passed = scored.passed;
+                r.grade = scored.grade || calculateKmuGrade(scored.percentage);
+                r.status = 'graded';
+                r.mcqMarks = scored.obtainedMarks;
+                r.mcqTotalMarks = scored.totalMarks;
+                r.correctCount = scored.correctCount;
+                r.correctMCQs = scored.correctCount;
+                r.answeredMCQs = scored.answersCount;
+                r.incorrectMCQs = Math.max(0, scored.answersCount - scored.correctCount);
+                r.totalMCQs = masterQs.length;
+                r.totalQuestions = masterQs.length;
+                if (!r.answers) r.answers = studentAnswers;
+                setDoc(doc(db, 'results', r.id), r, { merge: true }).catch(() => {});
+              }
             }
           }
         }
       }
+    } catch (resultsErr) {
+      console.warn('Error loading student results from results collection:', resultsErr);
     }
 
     // Also look for pending submitted assignments

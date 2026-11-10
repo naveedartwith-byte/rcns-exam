@@ -15,7 +15,7 @@ export interface AuthState {
 }
 
 export interface StudentRegistrationData {
-  email: string;
+  email?: string;
   password: string;
   name: string;
   fatherName: string;

@@ -22,8 +22,7 @@ service cloud.firestore {
         (request.auth.token.role in ['admin', 'Admin', 'ADMIN']) ||
         (request.auth.token.email != null && (
           request.auth.token.email.matches('(?i)admin@royalcollege\\.edu\\.pk') ||
-          request.auth.token.email.matches('(?i)naveedartwith@gmail\\.com') ||
-          request.auth.token.email.matches('(?i).*admin.*')
+          request.auth.token.email.matches('(?i)naveedartwith@gmail\\.com')
         ))
       );
     }
@@ -59,14 +58,6 @@ service cloud.firestore {
         ))
       );
     }
-
-    // Explicit test exam authorization: only approved test UIDs or trusted test role tokens
-    function isAuthorizedForTestExam(examId) {
-      return examId != 'exam-loadtest-100-live' ||
-             (request.auth.token.role == 'test_student' || request.auth.token.isLoadTestUser == true ||
-              (request.auth.token.email != null && request.auth.token.email.matches('(?i).*@rcns-test\\.internal')));
-    }
-
 
     // =========================================================================
     // USERS COLLECTION (Common identity metadata)
@@ -146,8 +137,7 @@ service cloud.firestore {
     // EXAMS COLLECTION
     // =========================================================================
     match /exams/{examId} {
-      // Authoritative identifier is the document path key examId.
-      // Normal students cannot read or discover the test exam.
+      // Normal students cannot read drafts or archived exams.
       allow read: if isAuthenticated() && (
         isAdmin() ||
         (isTeacher() && (
@@ -163,8 +153,7 @@ service cloud.firestore {
         )) ||
         (
           isStudent() &&
-          resource.data.status in ['scheduled', 'active', 'completed'] &&
-          isAuthorizedForTestExam(examId)
+          resource.data.status in ['scheduled', 'active', 'completed']
         )
       );
       
@@ -241,8 +230,7 @@ service cloud.firestore {
         isTeacher() ||
         (
           isStudent() &&
-          resource.data.studentId == request.auth.uid &&
-          isAuthorizedForTestExam(resource.data.examId)
+          resource.data.studentId == request.auth.uid
         )
       );
       
@@ -275,7 +263,6 @@ service cloud.firestore {
           resource.data.studentId == request.auth.uid &&
           request.resource.data.studentId == resource.data.studentId &&
           request.resource.data.examId == resource.data.examId &&
-          isAuthorizedForTestExam(resource.data.examId) &&
           (!('assignedBy' in resource.data) || request.resource.data.assignedBy == resource.data.assignedBy) &&
           (!('assignedAt' in resource.data) || request.resource.data.assignedAt == resource.data.assignedAt) &&
           (!('studentName' in resource.data) || request.resource.data.studentName == resource.data.studentName) &&
@@ -335,8 +322,7 @@ service cloud.firestore {
         isTeacher() ||
         (
           isStudent() &&
-          resource.data.studentId == request.auth.uid &&
-          isAuthorizedForTestExam(resource.data.examId)
+          resource.data.studentId == request.auth.uid
         )
       );
       

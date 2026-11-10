@@ -16,7 +16,7 @@ import {
 import { auth } from '../firebase/auth';
 import { db } from '../firebase/firestore';
 import type { StudentRegistrationData } from '../types/auth';
-import { normalizeKmuRegistration, generateKmuLookupCandidates } from '../utils/kmuRegistration';
+import { normalizeKmuRegistration, generateKmuLookupCandidates, generateKmuEmail } from '../utils/kmuRegistration';
 import { clearStudentProfilesCache } from './studentService';
 
 /**
@@ -100,6 +100,10 @@ export const authService = {
       throw new Error('Please enter a valid KMU Registration Number (e.g., 2026/KMU-RCNS/001).');
     }
 
+    const studentAuthEmail = (data.email && data.email.trim())
+      ? data.email.trim()
+      : generateKmuEmail(data.kmuRegistrationNo);
+
     console.log('[Registration Step 1] Pre-checking KMU uniqueness for:', normalizedKmu);
     // 1. Pre-check KMU uniqueness in Firestore before creating Auth user
     try {
@@ -116,11 +120,11 @@ export const authService = {
       throw new Error(`KMU verification error: ${kmuErr.message || kmuErr.code}`);
     }
 
-    console.log('[Registration Step 2] Creating Firebase Auth user for:', data.email.trim());
+    console.log('[Registration Step 2] Creating Firebase Auth user for:', studentAuthEmail);
     // 2. Create the Firebase Auth user
     const userCredential = await createUserWithEmailAndPassword(
       auth,
-      data.email.trim(),
+      studentAuthEmail,
       data.password
     );
     const user = userCredential.user;
@@ -141,7 +145,7 @@ export const authService = {
           doc(db, 'kmuRegistrations', key),
           {
             uid,
-            email: data.email.trim(),
+            email: studentAuthEmail,
             kmuRegistrationNo: data.kmuRegistrationNo.trim(),
             normalizedRegistrationNo: normalizedKmu,
             registeredAt: serverTimestamp(),
@@ -156,7 +160,7 @@ export const authService = {
         uid,
         role: 'student',
         name: data.name.trim(),
-        email: data.email.trim(),
+        email: studentAuthEmail,
         kmuRegistrationNo: data.kmuRegistrationNo.trim(),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -168,7 +172,7 @@ export const authService = {
         role: 'student',
         name: data.name.trim(),
         fatherName: data.fatherName.trim(),
-        email: data.email.trim(),
+        email: studentAuthEmail,
         kmuRegistrationNo: data.kmuRegistrationNo.trim(),
         batch: data.batch.trim(),
         semester: data.semester.trim(),

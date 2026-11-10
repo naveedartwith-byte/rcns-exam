@@ -22,9 +22,9 @@ import {
   KmuRegistrationInput,
 } from '../../components/ui';
 import { MOCK_PROGRAMS, MOCK_SEMESTERS, MOCK_BATCHES } from '../../mock/mockData';
-import { studentService } from '../../services/studentService';
+import { studentService, clearStudentProfilesCache } from '../../services/studentService';
 import { adminService } from '../../services/adminService';
-import { isValidKmuRegistration } from '../../utils/kmuRegistration';
+import { isValidKmuRegistration, generateKmuEmail } from '../../utils/kmuRegistration';
 import type { StudentProfile } from '../../types/student';
 
 export const AdminStudentsPage: React.FC = () => {
@@ -183,6 +183,7 @@ export const AdminStudentsPage: React.FC = () => {
 
       setPasswordSuccess(result.message);
       setNotification(`Candidate password updated for ${passwordModalStudent.name}`);
+      clearStudentProfilesCache();
       await fetchStudents();
       setTimeout(() => {
         setPasswordModalStudent(null);
@@ -730,21 +731,17 @@ export const AdminStudentsPage: React.FC = () => {
                 <span style={{ color: 'var(--color-slate-500)' }}>KMU Registration:</span>
                 <span style={{ fontWeight: 700, color: '#0f2744' }}>{passwordModalStudent.kmuRegistrationNo}</span>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ color: 'var(--color-slate-500)' }}>Account Email:</span>
-                <span style={{ fontWeight: 600, color: 'var(--color-slate-800)' }}>{passwordModalStudent.email || 'N/A'}</span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
+                <span style={{ color: 'var(--color-slate-500)' }}>Current Password:</span>
+                <span style={{ fontWeight: 700, fontFamily: 'monospace', color: '#0f2744', backgroundColor: '#e2e8f0', padding: '0.15rem 0.5rem', borderRadius: '4px', fontSize: '0.88rem' }}>
+                  {passwordModalStudent.passKey || 'Not stored in profile'}
+                </span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.35rem', paddingTop: '0.35rem', borderTop: '1px dashed #e2e8f0' }}>
-                <span style={{ color: 'var(--color-slate-500)' }}>Auth Sync:</span>
-                {passwordModalStudent.passKey ? (
-                  <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#059669', backgroundColor: '#ecfdf5', padding: '0.15rem 0.45rem', borderRadius: '4px', border: '1px solid #a7f3d0' }}>
-                    ✓ Direct Auth Sync Ready
-                  </span>
-                ) : (
-                  <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#d97706', backgroundColor: '#fffbeb', padding: '0.15rem 0.45rem', borderRadius: '4px', border: '1px solid #fde68a' }}>
-                    ⚡ Legacy Profile (Provide current pass or reset link)
-                  </span>
-                )}
+                <span style={{ color: 'var(--color-slate-500)' }}>Auth Identifier:</span>
+                <span style={{ fontWeight: 600, color: 'var(--color-slate-800)', fontSize: '0.8rem' }}>
+                  {passwordModalStudent.email || generateKmuEmail(passwordModalStudent.kmuRegistrationNo)}
+                </span>
               </div>
             </div>
 

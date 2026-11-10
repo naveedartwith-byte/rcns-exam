@@ -51,6 +51,16 @@ export function generateKmuLookupCandidates(rawRegistration: string): string[] {
 }
 
 /**
+ * Generates a deterministic internal student email from a KMU registration number
+ * for Firebase Authentication (e.g., "2026/KMU-RCNS/001" -> "2026_kmu-rcns_001@student.rcns.internal").
+ */
+export function generateKmuEmail(rawRegistration: string): string {
+  if (!rawRegistration) return '';
+  const norm = normalizeKmuRegistration(rawRegistration).toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+  return `${norm}@student.rcns.internal`;
+}
+
+/**
  * Validates whether a given string matches the KMU registration pattern.
  */
 export function isValidKmuRegistration(registrationNo: string): boolean {

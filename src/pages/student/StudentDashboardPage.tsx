@@ -52,15 +52,22 @@ export const StudentDashboardPage: React.FC = () => {
     if (!currentUser) return;
     try {
       setErrorMessage(null);
-      const [fetchedExams, fetchedResults] = await Promise.all([
-        assignmentService.getAuthorizedExamsForStudent(
-          currentUser.uid,
-          studentProfile?.program || program,
-          studentProfile?.semester || semester,
-          studentProfile?.batch || batch
-        ),
-        resultService.getResultsByStudentId(currentUser.uid),
-      ]);
+      const examsPromise = assignmentService.getAuthorizedExamsForStudent(
+        currentUser.uid,
+        studentProfile?.program || program,
+        studentProfile?.semester || semester,
+        studentProfile?.batch || batch
+      ).catch((e) => {
+        console.error('Error loading exams for student:', e);
+        return [];
+      });
+
+      const resultsPromise = resultService.getResultsByStudentId(currentUser.uid).catch((e) => {
+        console.error('Error loading results for student:', e);
+        return [];
+      });
+
+      const [fetchedExams, fetchedResults] = await Promise.all([examsPromise, resultsPromise]);
 
       setExams(fetchedExams);
       setResults(fetchedResults);

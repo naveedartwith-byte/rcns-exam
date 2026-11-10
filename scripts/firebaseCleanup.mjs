@@ -42,6 +42,7 @@ export const COLLECTIONS_TO_CLEAN = [
   'examSecrets',
   'examCodeHashes',
   'examCodeRateLimits',
+  'examLockAudits',
 ];
 
 // Protected collections
@@ -126,9 +127,9 @@ export function saveBackupPayload(data) {
 /**
  * Primary Inventory & Cleanup Engine using Firebase Admin SDK
  */
-export async function runAdminSdkCleanup(admin, options = { dryRun: true }) {
-  const db = admin.firestore();
-  const auth = admin.auth();
+export async function runAdminSdkCleanup(adminContext, options = { dryRun: true }) {
+  const db = adminContext.db || (typeof adminContext.firestore === 'function' ? adminContext.firestore() : adminContext);
+  const auth = adminContext.auth || (typeof adminContext.auth === 'function' ? adminContext.auth() : null);
 
   console.log('\n========================================================================');
   console.log('ROYAL COLLEGE OF NURSING SWAT — FIREBASE CLEANUP ENGINE');
@@ -190,16 +191,19 @@ export async function runAdminSdkCleanup(admin, options = { dryRun: true }) {
   }
 
   const primaryAdminUid = superAdminUser?.uid || Array.from(protectedAdminUids)[0];
-  console.log(`\n🛡️  ADMIN ACCOUNT IDENTIFIED & PROTECTED:`);
+  const verifiedLiveAdminUid = primaryAdminUid;
+  const verifiedAdminUids = new Set([verifiedLiveAdminUid]);
+
+  console.log(`\n🛡️  EXACT ADMIN ACCOUNT IDENTIFIED & LOCKED:`);
   console.log(`  • Email: ${superAdminUser?.email || SUPER_ADMIN_EMAIL}`);
-  console.log(`  • Immutable Firebase UID: ${primaryAdminUid}`);
+  console.log(`  • Immutable Firebase UID: ${verifiedLiveAdminUid}`);
   console.log(`  • Account Status: ${superAdminUser?.disabled ? 'Disabled' : 'Active'}`);
   console.log(`  • Creation Date: ${superAdminUser?.metadata?.creationTime || 'N/A'}`);
-  console.log(`  • Protected UIDs locked: [${Array.from(protectedAdminUids).join(', ')}]\n`);
+  console.log(`  • Strictly Preserved UID: [${verifiedLiveAdminUid}]\n`);
 
-  // Classify Auth users
-  const testAuthUsersToDelete = authUsersList.filter((u) => !protectedAdminUids.has(u.uid));
-  const authUsersToPreserve = authUsersList.filter((u) => protectedAdminUids.has(u.uid));
+  // Classify Auth users: ONLY verifiedLiveAdminUid is preserved
+  const testAuthUsersToDelete = authUsersList.filter((u) => u.uid !== verifiedLiveAdminUid);
+  const authUsersToPreserve = authUsersList.filter((u) => u.uid === verifiedLiveAdminUid);
 
   // STEP 2: Survey Firestore Collections
   console.log('[Step 2/5] Surveying Cloud Firestore Collections & Documents...');
@@ -228,11 +232,11 @@ export async function runAdminSdkCleanup(admin, options = { dryRun: true }) {
     }
   }
 
-  // 2b. users Collection (preserve admin users, delete test users)
+  // 2b. users Collection (preserve ONLY verified live admin user, delete test users and old ghost records)
   const usersToDelete = [];
   const usersToPreserve = [];
   for (const docSnap of usersSnap.docs) {
-    const isProtected = protectedAdminUids.has(docSnap.id) || isProtectedAdmin(docSnap.id, docSnap.data().email, protectedAdminUids);
+    const isProtected = docSnap.id === verifiedLiveAdminUid;
     if (isProtected) {
       usersToPreserve.push({ id: docSnap.id, data: docSnap.data() });
       firestoreDocsToPreserve.push({ collection: 'users', id: docSnap.id });
@@ -250,18 +254,38 @@ export async function runAdminSdkCleanup(admin, options = { dryRun: true }) {
   totalDocsScanned += usersSnap.size;
 
   // 2c. Preserved Collections (admins, settings)
-  for (const colName of PRESERVED_COLLECTIONS) {
-    const colSnap = await db.collection(colName).get();
-    firestoreInventory[colName] = {
-      total: colSnap.size,
-      toDelete: 0,
-      toPreserve: colSnap.size,
-      documents: colSnap.docs.map((d) => ({ id: d.id, data: d.data() })),
-    };
-    totalDocsScanned += colSnap.size;
-    for (const docSnap of colSnap.docs) {
-      firestoreDocsToPreserve.push({ collection: colName, id: docSnap.id });
+  // admins: preserve ONLY verifiedLiveAdminUid
+  const adminsToDelete = [];
+  const adminsToPreserve = [];
+  for (const docSnap of adminsSnap.docs) {
+    const isProtected = docSnap.id === verifiedLiveAdminUid;
+    if (isProtected) {
+      adminsToPreserve.push({ id: docSnap.id, data: docSnap.data() });
+      firestoreDocsToPreserve.push({ collection: 'admins', id: docSnap.id });
+    } else {
+      adminsToDelete.push({ id: docSnap.id, data: docSnap.data() });
+      firestoreDocsToDelete.push({ collection: 'admins', id: docSnap.id, ref: docSnap.ref });
     }
+  }
+  firestoreInventory['admins'] = {
+    total: adminsSnap.size,
+    toDelete: adminsToDelete.length,
+    toPreserve: adminsToPreserve.length,
+    documents: adminsSnap.docs.map((d) => ({ id: d.id, data: d.data() })),
+  };
+  totalDocsScanned += adminsSnap.size;
+
+  // settings: 100% preserved
+  const settingsSnap = await db.collection('settings').get();
+  firestoreInventory['settings'] = {
+    total: settingsSnap.size,
+    toDelete: 0,
+    toPreserve: settingsSnap.size,
+    documents: settingsSnap.docs.map((d) => ({ id: d.id, data: d.data() })),
+  };
+  totalDocsScanned += settingsSnap.size;
+  for (const docSnap of settingsSnap.docs) {
+    firestoreDocsToPreserve.push({ collection: 'settings', id: docSnap.id });
   }
 
   // STEP 3: Complete Recoverable Backup
@@ -361,7 +385,7 @@ export async function runAdminSdkCleanup(admin, options = { dryRun: true }) {
 
     // Triple check NO protected admin document is included
     for (const item of firestoreDocsToDelete) {
-      if (protectedAdminUids.has(item.id) && (item.collection === 'users' || item.collection === 'admins')) {
+      if (verifiedAdminUids.has(item.id) && (item.collection === 'users' || item.collection === 'admins')) {
         throw new Error(`[CRITICAL ABORT] Protected admin document found in deletion queue: ${item.collection}/${item.id}`);
       }
     }
@@ -419,45 +443,66 @@ export async function runAdminSdkCleanup(admin, options = { dryRun: true }) {
 // CLI entry point
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename)) {
   const isExecute = process.argv.includes('--execute');
-  const serviceAccountPath =
-    process.env.GOOGLE_APPLICATION_CREDENTIALS ||
-    path.resolve(ROOT_DIR, 'serviceAccountKey.json') ||
-    path.resolve(__dirname, 'serviceAccountKey.json');
-
-  let adminSdk = null;
-  try {
-    const adminModule = await import('../functions/node_modules/firebase-admin/lib/index.js');
-    adminSdk = adminModule.default || adminModule;
-  } catch (err) {
-    try {
-      const adminModule = await import('firebase-admin');
-      adminSdk = adminModule.default || adminModule;
-    } catch {
-      console.error('firebase-admin not available. Please install dependencies in ./functions.');
-      process.exit(1);
-    }
-  }
-
-  if (fs.existsSync(serviceAccountPath)) {
-    console.log(`Loading service account key from: ${serviceAccountPath}`);
-    const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf-8'));
-    adminSdk.initializeApp({
-      credential: adminSdk.credential.cert(serviceAccount),
-      projectId: TARGET_PROJECT_ID,
-    });
+  let resolvedKeyPath = null;
+  if (process.env.GOOGLE_APPLICATION_CREDENTIALS && fs.existsSync(process.env.GOOGLE_APPLICATION_CREDENTIALS)) {
+    resolvedKeyPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  } else if (fs.existsSync(path.resolve(ROOT_DIR, 'serviceAccountKey.json'))) {
+    resolvedKeyPath = path.resolve(ROOT_DIR, 'serviceAccountKey.json');
+  } else if (fs.existsSync(path.resolve(__dirname, 'serviceAccountKey.json'))) {
+    resolvedKeyPath = path.resolve(__dirname, 'serviceAccountKey.json');
   } else {
-    // Attempt default initialization
     try {
-      adminSdk.initializeApp({ projectId: TARGET_PROJECT_ID });
-    } catch (err) {
-      console.error(`[Notice] To run server-side cleanup via Firebase Admin SDK, please provide:`);
-      console.error(`  1) A service account key at ./serviceAccountKey.json, OR`);
-      console.error(`  2) Set GOOGLE_APPLICATION_CREDENTIALS=/path/to/key.json\n`);
-      process.exit(1);
-    }
+      const filesInRoot = fs.readdirSync(ROOT_DIR);
+      const candidate = filesInRoot.find(
+        (f) => f.endsWith('.json') && (f.includes('adminsdk') || f.includes('serviceAccount') || f.includes('firebase-admin'))
+      );
+      if (candidate) {
+        resolvedKeyPath = path.resolve(ROOT_DIR, candidate);
+      }
+    } catch {}
   }
 
-  runAdminSdkCleanup(adminSdk, { dryRun: !isExecute })
+  let app = null;
+  let getFirestoreFn = null;
+  let getAuthFn = null;
+
+  try {
+    const { initializeApp, cert } = await import('firebase-admin/app');
+    const { getFirestore } = await import('firebase-admin/firestore');
+    const { getAuth } = await import('firebase-admin/auth');
+    getFirestoreFn = getFirestore;
+    getAuthFn = getAuth;
+
+    if (resolvedKeyPath && fs.existsSync(resolvedKeyPath)) {
+      console.log(`Loading service account key from: ${resolvedKeyPath}`);
+      const serviceAccount = JSON.parse(fs.readFileSync(resolvedKeyPath, 'utf-8'));
+      app = initializeApp({
+        credential: cert(serviceAccount),
+        projectId: TARGET_PROJECT_ID,
+      });
+    } else {
+      console.log('No serviceAccountKey.json found. Attempting Application Default Credentials...');
+      try {
+        app = initializeApp({ projectId: TARGET_PROJECT_ID });
+      } catch (err) {
+        console.error(`[Notice] To run server-side cleanup via Firebase Admin SDK, please provide:`);
+        console.error(`  1) A service account key at ./serviceAccountKey.json, OR`);
+        console.error(`  2) Set GOOGLE_APPLICATION_CREDENTIALS=/path/to/key.json\n`);
+        process.exit(1);
+      }
+    }
+  } catch (err) {
+    console.error('Failed to initialize Firebase Admin SDK:', err.message);
+    console.error(`[Notice] To run server-side cleanup via Firebase Admin SDK, please provide:`);
+    console.error(`  1) A service account key at ./serviceAccountKey.json, OR`);
+    console.error(`  2) Set GOOGLE_APPLICATION_CREDENTIALS=/path/to/key.json\n`);
+    process.exit(1);
+  }
+
+  const db = getFirestoreFn(app);
+  const auth = getAuthFn(app);
+
+  runAdminSdkCleanup({ db, auth }, { dryRun: !isExecute })
     .then((res) => {
       console.log('Script execution finished successfully.');
     })

@@ -213,9 +213,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const email = (firebaseUser.email || '').trim().toLowerCase();
         const isAdminEmail =
           email === 'naveedartwith@gmail.com' ||
-          email === 'admin@royalcollege.edu.pk' ||
-          email.startsWith('admin@') ||
-          email.includes('admin');
+          email === 'admin@royalcollege.edu.pk';
 
         if (isAdminEmail) {
           const adminName =

@@ -33,6 +33,13 @@ dist-ssr
 *.pem
 serviceAccountKey.json
 firebase-admin-key.json
+*firebase-adminsdk*.json
+*serviceAccount*.json
+*.credentials.json
+
+# Backups & Data Dumps
+backups/
+*.json.bak
 
 # Firebase Cache & Emulators
 .firebase

@@ -23,6 +23,7 @@ import { app, firebaseConfig } from '../firebase/config';
 import { db } from '../firebase/firestore';
 import { auth } from '../firebase/auth';
 import { functions } from '../firebase/functions';
+import { normalizeKmuRegistration, generateKmuEmail } from '../utils/kmuRegistration';
 import type { AdminProfile, StorageMetrics, AdminDashboardStats } from '../types/admin';
 import type { TeacherProfile } from '../types/teacher';
 
@@ -474,11 +475,15 @@ export const adminService = {
     try {
       let candidateEmail = (studentEmail || '').trim();
       let currentPass = (knownCurrentPassword || '').trim();
+      let kmuReg = '';
 
       // If email or current pass is missing, check student and user Firestore documents
       const studentSnap = await getDoc(doc(db, 'students', studentUid));
       if (studentSnap.exists()) {
         const sData = studentSnap.data();
+        if (sData.kmuRegistrationNo) {
+          kmuReg = sData.kmuRegistrationNo.trim();
+        }
         if (!candidateEmail && sData.email) {
           candidateEmail = sData.email.trim();
         }
@@ -487,7 +492,22 @@ export const adminService = {
         }
       }
 
-      if (!candidateEmail) {
+      // Check kmuRegistrations record if candidate email is missing or doesn't have email format
+      if ((!candidateEmail || !candidateEmail.includes('@')) && kmuReg) {
+        const normalized = normalizeKmuRegistration(kmuReg);
+        if (normalized) {
+          const kmuSnap = await getDoc(doc(db, 'kmuRegistrations', normalized));
+          if (kmuSnap.exists() && kmuSnap.data()?.email) {
+            candidateEmail = kmuSnap.data().email.trim();
+          }
+        }
+        // Fallback to deterministic KMU email
+        if (!candidateEmail || !candidateEmail.includes('@')) {
+          candidateEmail = generateKmuEmail(kmuReg);
+        }
+      }
+
+      if (!candidateEmail || !candidateEmail.includes('@')) {
         const userSnap = await getDoc(doc(db, 'users', studentUid));
         if (userSnap.exists() && userSnap.data()?.email) {
           candidateEmail = userSnap.data().email.trim();
@@ -506,8 +526,9 @@ export const adminService = {
             await updatePassword(secondaryAuth.currentUser, newPassword);
             await signOut(secondaryAuth);
 
-            // Persist the new passKey in Firestore
-            await setDoc(
+            // Persist the new passKey in Firestore (students and users)
+            const batch = writeBatch(db);
+            batch.set(
               doc(db, 'students', studentUid),
               {
                 passKey: newPassword,
@@ -515,15 +536,32 @@ export const adminService = {
               },
               { merge: true }
             );
+            batch.set(
+              doc(db, 'users', studentUid),
+              {
+                passKey: newPassword,
+                updatedAt: serverTimestamp(),
+              },
+              { merge: true }
+            );
+            await batch.commit();
+
+            clearAdminDashboardStatsCache();
+            clearStorageMetricsCache();
 
             return {
               success: true,
               method: 'direct',
-              message: 'Student password successfully updated in Firebase Authentication.',
+              message: 'Student password successfully updated in Firebase Authentication and database.',
             };
           }
         } catch (secErr: any) {
           console.warn('Secondary auth direct update error:', secErr?.code || secErr?.message);
+          throw new Error(
+            secErr?.code === 'auth/wrong-password' || secErr?.code === 'auth/invalid-credential'
+              ? 'Could not authenticate candidate in Firebase Auth with the stored previous password. Please verify current password.'
+              : `Firebase Authentication update error: ${secErr?.message || secErr?.code}`
+          );
         } finally {
           try {
             await deleteApp(secondaryApp);
@@ -531,8 +569,9 @@ export const adminService = {
         }
       }
 
-      // Save the new passKey in Firestore so credential is known going forward
-      await setDoc(
+      // If current pass was not known, save new passKey in Firestore
+      const batch = writeBatch(db);
+      batch.set(
         doc(db, 'students', studentUid),
         {
           passKey: newPassword,
@@ -540,14 +579,26 @@ export const adminService = {
         },
         { merge: true }
       );
+      batch.set(
+        doc(db, 'users', studentUid),
+        {
+          passKey: newPassword,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+      await batch.commit();
 
-      // If secondary app direct update couldn't authenticate, dispatch password reset link
+      clearAdminDashboardStatsCache();
+      clearStorageMetricsCache();
+
+      // If candidate has an email, dispatch password reset link as fallback
       if (candidateEmail && candidateEmail.includes('@')) {
         await sendPasswordResetEmail(auth, candidateEmail);
         return {
           success: true,
           method: 'reset-email',
-          message: `Direct update requires current password. A password reset link was dispatched to ${candidateEmail}.`,
+          message: `Direct Auth update requires current password. A password reset link was dispatched to ${candidateEmail}, and profile passKey was recorded.`,
         };
       }
     } catch (fallbackErr: any) {
