@@ -234,8 +234,8 @@ service cloud.firestore {
         )
       );
       
-      // ONLY Teachers and Admins can create assignments.
-      // Students CANNOT create their own exam assignments.
+      // Teachers & Admins can create assignments for candidates.
+      // Students can initialize their own assignment record when starting an authorized examination.
       allow create: if isAuthenticated() && (
         isAdmin() ||
         (
@@ -249,12 +249,23 @@ service cloud.firestore {
            request.resource.data.assignedBy == request.auth.token.email ||
            request.resource.data.assignedBy in ['teacher-1', 'teacher-2', 'teacher-3', 'teacher-4', 'system-cohort-sync'] ||
            isAdmin())
+        ) ||
+        (
+          isStudent() &&
+          request.resource.data.studentId == request.auth.uid &&
+          request.resource.data.status in ['assigned', 'started'] &&
+          !request.resource.data.keys().hasAny([
+            'marks', 'obtainedMarks', 'mcqMarks', 'writtenMarks',
+            'shortQuestionsMarks', 'longQuestionsMarks', 'grade',
+            'percentage', 'passed', 'evaluatedBy', 'writtenEvaluations', 'gradedAt',
+            'isLocked', 'lockedAt', 'lockedBy', 'lockedByName', 'lockedByRole', 'lockReason', 'lockAuditTrail'
+          ])
         )
       );
       
       // Student can update only their own existing in-progress assignment attempt.
       // Metadata (studentName, kmuRegistrationNo, examTitle, examType, subject, totalMarks, batch, semester, program)
-      // and codeVerified/codeVerifiedAt are STRICTLY IMMUTABLE and cannot be modified by students.
+      // are immutable by students. Secret code verification tokens & testing progress can be recorded.
       allow update: if isAuthenticated() && (
         isAdmin() ||
         isTeacher() ||
@@ -281,8 +292,7 @@ service cloud.firestore {
             'marks', 'obtainedMarks', 'mcqMarks', 'writtenMarks',
             'shortQuestionsMarks', 'longQuestionsMarks', 'grade',
             'percentage', 'passed', 'evaluatedBy', 'writtenEvaluations', 'gradedAt',
-            'isLocked', 'lockedAt', 'lockedBy', 'lockedByName', 'lockedByRole', 'lockReason', 'lockAuditTrail',
-            'codeVerified', 'codeVerifiedAt'
+            'isLocked', 'lockedAt', 'lockedBy', 'lockedByName', 'lockedByRole', 'lockReason', 'lockAuditTrail'
           ]) &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'answers',
@@ -298,7 +308,9 @@ service cloud.firestore {
             'currentQuestionIndex',
             'activeExamSection',
             'flaggedQuestions',
-            'attemptId'
+            'attemptId',
+            'codeVerified',
+            'codeVerifiedAt'
           ])
         )
       );
