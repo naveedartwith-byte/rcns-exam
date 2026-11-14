@@ -11,6 +11,7 @@ export interface Question {
   correctAnswer: string | number; // 'A' | 'B' | 'C' | 'D' or 0 | 1 | 2 | 3 or option text
   marks: number;
   order: number;
+  originalIndex?: number;
   explanation?: string;
   createdBy?: string;
   createdAt?: any;
@@ -27,6 +28,7 @@ export interface MasterQuestion {
   correctAnswer: string | number;
   marks: number;
   order: number;
+  originalIndex?: number;
   explanation?: string;
   createdBy?: string;
   createdAt?: any;

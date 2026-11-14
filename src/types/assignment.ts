@@ -31,6 +31,7 @@ export interface Assignment {
   timeLeftSeconds?: number;
   activeExamSection?: 'mcq' | 'written';
   flaggedQuestions?: number[];
+  shuffledQuestionIds?: string[];
   tabSwitchCount?: number;
   codeVerified?: boolean;
   codeVerifiedAt?: Timestamp | string;

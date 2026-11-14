@@ -426,6 +426,7 @@ export const assignmentService = {
     timeLeftSeconds?: number;
     activeExamSection?: 'mcq' | 'written';
     flaggedQuestions?: Record<number, boolean>;
+    shuffledQuestionIds?: string[];
     batch?: string;
     semester?: string;
     program?: string;
@@ -453,6 +454,7 @@ export const assignmentService = {
       if (params.timeLeftSeconds !== undefined) payload.timeLeftSeconds = params.timeLeftSeconds;
       if (params.activeExamSection !== undefined) payload.activeExamSection = params.activeExamSection;
       if (params.flaggedQuestions !== undefined) payload.flaggedQuestions = params.flaggedQuestions;
+      if (params.shuffledQuestionIds !== undefined) payload.shuffledQuestionIds = params.shuffledQuestionIds;
       if (params.batch) payload.batch = params.batch;
       if (params.semester) payload.semester = params.semester;
       if (params.program) payload.program = params.program;
@@ -464,6 +466,14 @@ export const assignmentService = {
     } catch (err) {
       console.warn('Candidate heartbeat recording note:', err);
     }
+  },
+
+  /**
+   * Updates candidate assignment progress (e.g. shuffled question sequence, active draft).
+   */
+  async updateAssignmentProgress(assignmentId: string, data: Partial<Assignment>): Promise<void> {
+    const assignmentRef = doc(db, 'assignments', assignmentId);
+    await setDoc(assignmentRef, { ...data, updatedAt: serverTimestamp() }, { merge: true });
   },
 
   /**

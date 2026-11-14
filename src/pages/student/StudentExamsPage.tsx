@@ -29,6 +29,7 @@ import { formatPakistanDateTime } from '../../utils/dateTime';
 import { checkStudentExamEligibility } from '../../utils/examEligibility';
 import { SecretExamCodeModal } from '../../components/student/SecretExamCodeModal';
 import { examCodeService } from '../../services/examCodeService';
+import { prepareStudentQuestions } from '../../utils/shuffle';
 
 export const StudentExamsPage: React.FC = () => {
   const { currentUser, userProfile, studentProfile } = useAuth();
@@ -117,6 +118,7 @@ export const StudentExamsPage: React.FC = () => {
         timeLeftSeconds,
         flaggedQuestions,
         tabSwitchCount,
+        shuffledQuestionIds: examQuestions.map((q) => q.id),
         lastSavedAt: Date.now(),
       };
       localStorage.setItem(
@@ -514,6 +516,7 @@ export const StudentExamsPage: React.FC = () => {
     let savedSection: 'mcq' | 'written' = 'mcq';
     let savedFlags: Record<number, boolean> = {};
     let savedSwitches = 0;
+    let savedQuestionOrder: string[] | undefined = undefined;
     let isResumed = false;
     let isLockedAttempt = false;
     let initialLockReason: string | null = null;
@@ -526,6 +529,9 @@ export const StudentExamsPage: React.FC = () => {
         if (localStr) {
           const parsed = JSON.parse(localStr);
           if (parsed && parsed.examId === exam.id) {
+            if (parsed.shuffledQuestionIds && Array.isArray(parsed.shuffledQuestionIds)) {
+              savedQuestionOrder = parsed.shuffledQuestionIds;
+            }
             if (parsed.selectedAnswers && Object.keys(parsed.selectedAnswers).length > 0) {
               savedAnswers = parsed.selectedAnswers;
               isResumed = true;
@@ -557,6 +563,9 @@ export const StudentExamsPage: React.FC = () => {
           if (assign.status === 'submitted' || assign.status === 'graded') {
             alert('Institutional Notice: You have already completed and submitted this examination.');
             return;
+          }
+          if (assign.shuffledQuestionIds && Array.isArray(assign.shuffledQuestionIds) && (!savedQuestionOrder || savedQuestionOrder.length === 0)) {
+            savedQuestionOrder = assign.shuffledQuestionIds;
           }
           if (assign.answers && Object.keys(assign.answers).length > 0) {
             savedAnswers = { ...assign.answers, ...savedAnswers };
@@ -631,12 +640,38 @@ export const StudentExamsPage: React.FC = () => {
     }
 
     try {
-      const [questions, wQuestions] = await Promise.all([
+      const [rawQuestions, wQuestions] = await Promise.all([
         questionService.getStudentQuestions(exam.id, activeUid),
         writtenQuestionService.getStudentWrittenQuestions(exam.id, activeUid),
       ]);
+      const questions = prepareStudentQuestions(
+        rawQuestions,
+        exam.id,
+        activeUid || 'candidate',
+        savedQuestionOrder,
+        exam.shuffleQuestions !== false
+      );
       setExamQuestions(questions);
       setWrittenQuestions(wQuestions);
+
+      // Persist the candidate's randomized sequence immediately for robust recovery
+      if (activeUid && (!savedQuestionOrder || savedQuestionOrder.length === 0) && questions.length > 0) {
+        const qIds = questions.map((q) => q.id);
+        try {
+          const localKey = `rcns_exam_progress_${activeUid}_${exam.id}`;
+          const currentLocal = localStorage.getItem(localKey);
+          const parsedLocal = currentLocal ? JSON.parse(currentLocal) : {};
+          localStorage.setItem(
+            localKey,
+            JSON.stringify({ ...parsedLocal, shuffledQuestionIds: qIds })
+          );
+        } catch {}
+
+        assignmentService.updateAssignmentProgress(`${exam.id}_${activeUid}`, {
+          shuffledQuestionIds: qIds,
+        }).catch(() => {});
+      }
+
       if (questions.length === 0 && wQuestions.length === 0) {
         setExamQuestionsError('No examination questions were found for this paper. Please contact your course instructor.');
       }
@@ -685,10 +720,12 @@ export const StudentExamsPage: React.FC = () => {
 
   const handleSelectOption = (optIndex: number) => {
     if (isExamLocked) return;
+    const currentQ = examQuestions[currentQuestionIndex];
     setSelectedAnswers((prev) => {
       const updated = {
         ...prev,
         [currentQuestionIndex]: optIndex,
+        ...(currentQ?.id ? { [currentQ.id]: optIndex } : {}),
       };
       selectedAnswersRef.current = updated;
       // Keep local progress updated
@@ -699,7 +736,12 @@ export const StudentExamsPage: React.FC = () => {
           const data = current ? JSON.parse(current) : {};
           localStorage.setItem(
             key,
-            JSON.stringify({ ...data, selectedAnswers: updated, lastSavedAt: Date.now() })
+            JSON.stringify({
+              ...data,
+              selectedAnswers: updated,
+              shuffledQuestionIds: examQuestions.map((q) => q.id),
+              lastSavedAt: Date.now(),
+            })
           );
         } catch {}
       }
@@ -899,20 +941,34 @@ export const StudentExamsPage: React.FC = () => {
 
         if (chosenVal !== undefined) {
           totalAttemptedMcqs++;
-          normalizedMcqAnswers[idx] = chosenVal;
-          normalizedMcqAnswers[String(idx)] = chosenVal;
-          normalizedMcqAnswers[idx + 1] = chosenVal;
-          normalizedMcqAnswers[String(idx + 1)] = chosenVal;
-          normalizedMcqAnswers[`q-${idx + 1}`] = chosenVal;
-          normalizedMcqAnswers[`q${idx + 1}`] = chosenVal;
+          // 1. Primary candidate key: question ID
           if (q.id) {
             normalizedMcqAnswers[q.id] = chosenVal;
           }
+
+          // 2. Original master position index (0-based and 1-based)
+          const origIdx =
+            (q as any).originalIndex !== undefined
+              ? (q as any).originalIndex
+              : q.order !== undefined
+              ? q.order - 1
+              : idx;
+
+          normalizedMcqAnswers[origIdx] = chosenVal;
+          normalizedMcqAnswers[String(origIdx)] = chosenVal;
+          normalizedMcqAnswers[origIdx + 1] = chosenVal;
+          normalizedMcqAnswers[String(origIdx + 1)] = chosenVal;
+          normalizedMcqAnswers[`q-${origIdx + 1}`] = chosenVal;
+          normalizedMcqAnswers[`q${origIdx + 1}`] = chosenVal;
+
+          // 3. Original master order (1-based and 0-based)
           if (q.order !== undefined) {
             normalizedMcqAnswers[q.order] = chosenVal;
             normalizedMcqAnswers[String(q.order)] = chosenVal;
             normalizedMcqAnswers[`q-${q.order}`] = chosenVal;
             normalizedMcqAnswers[`q${q.order}`] = chosenVal;
+            normalizedMcqAnswers[q.order - 1] = chosenVal;
+            normalizedMcqAnswers[String(q.order - 1)] = chosenVal;
           }
         }
       });
@@ -1152,6 +1208,24 @@ export const StudentExamsPage: React.FC = () => {
                         >
                           🔒 Code Protected
                         </Badge>
+                      )}
+                      {exam.shuffleQuestions !== false && (
+                        <span
+                          style={{
+                            fontSize: '0.72rem',
+                            fontWeight: 600,
+                            color: '#166534',
+                            backgroundColor: '#f0fdf4',
+                            border: '1px solid #bbf7d0',
+                            padding: '0.15rem 0.5rem',
+                            borderRadius: 'var(--radius-sm)',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '3px',
+                          }}
+                        >
+                          🔀 Shuffled
+                        </span>
                       )}
                     </div>
 
@@ -1418,6 +1492,11 @@ export const StudentExamsPage: React.FC = () => {
                 </div>
                 <div style={{ fontSize: '0.72rem', color: '#94a3b8', lineHeight: 1.2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   {takingExam.subject} • Candidate: {studentProfile?.kmuRegistrationNo || 'KMU Verified'}
+                  {takingExam.shuffleQuestions !== false && (
+                    <span style={{ marginLeft: '6px', color: '#86efac', fontWeight: 600 }}>
+                      • 🔀 Anti-Cheating Paper
+                    </span>
+                  )}
                 </div>
               </div>
             </div>

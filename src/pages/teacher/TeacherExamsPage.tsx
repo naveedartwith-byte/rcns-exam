@@ -121,6 +121,7 @@ export const TeacherExamsPage: React.FC = () => {
     instructions: 'Please answer all multiple choice questions. Zero tolerance for unfair means.',
     status: 'draft' as 'draft' | 'scheduled' | 'active' | 'completed' | 'archived',
     secretCode: examCodeService.generateRandomCode(),
+    shuffleQuestions: true,
   });
 
   // Dedicated Cohort Assignment Modal State (ISSUE 2)
@@ -206,6 +207,7 @@ export const TeacherExamsPage: React.FC = () => {
       instructions: 'Please answer all multiple choice questions. Zero tolerance for unfair means.',
       status: 'scheduled',
       secretCode: examCodeService.generateRandomCode(),
+      shuffleQuestions: true,
     });
     setIsExamModalOpen(true);
   };
@@ -243,6 +245,7 @@ export const TeacherExamsPage: React.FC = () => {
       instructions: exam.instructions || 'Please answer all questions carefully.',
       status: exam.status,
       secretCode: existingCode || examCodeService.generateRandomCode(),
+      shuffleQuestions: exam.shuffleQuestions !== false,
     });
     setIsExamModalOpen(true);
   };
@@ -303,6 +306,7 @@ export const TeacherExamsPage: React.FC = () => {
         await examService.updateExam(editingExam.id, {
           ...examPayload,
           requiresSecretCode: true,
+          shuffleQuestions: examForm.shuffleQuestions !== false,
           startAt: startIso,
           endAt: endIso,
           duration: Number(examForm.duration),
@@ -331,6 +335,7 @@ export const TeacherExamsPage: React.FC = () => {
         const newExamId = await examService.createExam({
           ...examPayload,
           requiresSecretCode: true,
+          shuffleQuestions: examForm.shuffleQuestions !== false,
           startAt: startIso,
           endAt: endIso,
           teacherId: currentUser.uid,
@@ -700,6 +705,13 @@ export const TeacherExamsPage: React.FC = () => {
                     <TableCell>
                       <div style={{ fontWeight: 700, color: 'var(--color-slate-900)' }}>{exam.title}</div>
                       <div style={{ fontSize: '0.8rem', color: 'var(--color-slate-500)' }}>{exam.subject}</div>
+                      {exam.shuffleQuestions !== false && (
+                        <div style={{ marginTop: '0.25rem' }}>
+                          <span style={{ fontSize: '0.72rem', backgroundColor: '#f0fdf4', color: '#166534', border: '1px solid #bbf7d0', padding: '2px 6px', borderRadius: '4px', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
+                            🔀 Anti-Cheating Shuffled
+                          </span>
+                        </div>
+                      )}
                     </TableCell>
 
                     <TableCell>
@@ -1331,6 +1343,47 @@ export const TeacherExamsPage: React.FC = () => {
                 </button>
               </div>
             </div>
+          </div>
+
+          {/* Anti-Cheating & Exam Integrity Controls */}
+          <div
+            style={{
+              padding: '1rem',
+              borderRadius: 'var(--radius-md)',
+              backgroundColor: '#f0fdf4',
+              border: '1.5px solid #86efac',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '0.5rem',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
+              <label
+                htmlFor="shuffleQuestionsCheckbox"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.65rem',
+                  cursor: 'pointer',
+                  fontWeight: 700,
+                  color: '#166534',
+                  fontSize: '0.95rem',
+                }}
+              >
+                <input
+                  id="shuffleQuestionsCheckbox"
+                  type="checkbox"
+                  checked={examForm.shuffleQuestions}
+                  onChange={(e) => setExamForm({ ...examForm, shuffleQuestions: e.target.checked })}
+                  style={{ width: '18px', height: '18px', cursor: 'pointer', accentColor: '#16a34a' }}
+                />
+                <span>🔀 Anti-Cheating: Randomize MCQ Sequence for Each Student</span>
+              </label>
+              <Badge variant="success">Recommended for Anti-Cheating</Badge>
+            </div>
+            <p style={{ margin: 0, fontSize: '0.8rem', color: '#15803d', paddingLeft: '1.85rem', lineHeight: 1.45 }}>
+              When enabled, each candidate in the examination hall receives MCQs in a completely different, unique order. Prevents students from copying answers from neighboring screens during the test.
+            </p>
           </div>
 
           {/* Section 5: Instructions */}

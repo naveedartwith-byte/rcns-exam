@@ -186,6 +186,13 @@ export const AdminExamsPage: React.FC = () => {
                     <TableCell>
                       <div style={{ fontWeight: 700, color: 'var(--color-slate-900)' }}>{exam.title}</div>
                       <div style={{ fontSize: '0.8rem', color: 'var(--color-slate-500)' }}>{exam.subject}</div>
+                      {exam.shuffleQuestions !== false && (
+                        <div style={{ marginTop: '0.25rem' }}>
+                          <span style={{ fontSize: '0.72rem', backgroundColor: '#f0fdf4', color: '#166534', border: '1px solid #bbf7d0', padding: '2px 6px', borderRadius: '4px', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
+                            🔀 Anti-Cheating Shuffled
+                          </span>
+                        </div>
+                      )}
                     </TableCell>
 
                     <TableCell>
@@ -295,6 +302,16 @@ export const AdminExamsPage: React.FC = () => {
               <div>
                 <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)', textTransform: 'uppercase' }}>Status</span>
                 <div><Badge variant="primary">{selectedExam.status}</Badge></div>
+              </div>
+              <div>
+                <span style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)', textTransform: 'uppercase' }}>Anti-Cheating Security</span>
+                <div>
+                  {selectedExam.shuffleQuestions !== false ? (
+                    <Badge variant="success">🔀 MCQs Shuffled per Candidate</Badge>
+                  ) : (
+                    <Badge variant="outline">Standard Order</Badge>
+                  )}
+                </div>
               </div>
             </div>
 

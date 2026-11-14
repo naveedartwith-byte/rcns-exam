@@ -85,6 +85,7 @@ export const questionService = {
             options: q.options || [],
             marks: Number(q.marks) || 1,
             order: Number(q.order) || idx + 1,
+            originalIndex: idx,
           }));
         }
       }

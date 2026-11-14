@@ -23,6 +23,7 @@ export interface Exam {
   questionCount?: number;
   mcqDefaultMarks?: number;
   requiresSecretCode?: boolean;
+  shuffleQuestions?: boolean;
   codeSalt?: string;
   codeHash?: string;
   instructions?: string;

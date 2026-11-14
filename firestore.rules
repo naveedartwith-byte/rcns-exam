@@ -308,6 +308,8 @@ service cloud.firestore {
             'currentQuestionIndex',
             'activeExamSection',
             'flaggedQuestions',
+            'shuffledQuestionIds',
+            'updatedAt',
             'attemptId',
             'codeVerified',
             'codeVerifiedAt'
