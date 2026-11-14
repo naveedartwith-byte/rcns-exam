@@ -58,6 +58,23 @@ export async function getMasterQuestionsForExam(examId: string, examData?: any):
     return sorted;
   }
 
+  // 2. Read from protected examAnswerKeys/{examId} document (1 single read, authorized for students who submitted & faculty)
+  try {
+    const keyRef = doc(db, 'examAnswerKeys', examId);
+    const keySnap = await getDoc(keyRef);
+    if (keySnap.exists()) {
+      const data = keySnap.data();
+      if (Array.isArray(data?.questions) && data.questions.length > 0) {
+        const sorted = [...data.questions].sort((a: any, b: any) => (Number(a.order) || 0) - (Number(b.order) || 0));
+        examMasterQuestionsCache.set(examId, sorted as MasterQuestion[]);
+        return sorted as MasterQuestion[];
+      }
+    }
+  } catch (keyErr) {
+    console.warn('[getMasterQuestionsForExam] Could not read from examAnswerKeys:', keyErr);
+  }
+
+  // 3. Fallback: Query questions collection (works for Faculty/Admins)
   let masterQs: MasterQuestion[] = [];
   try {
     const qCol = collection(db, 'questions');
@@ -68,6 +85,32 @@ export async function getMasterQuestionsForExam(examId: string, examData?: any):
     }
   } catch (err) {
     console.warn('[getMasterQuestionsForExam] Could not query questions collection:', err);
+  }
+
+  // If Faculty/Admin retrieved master questions and examAnswerKeys was not yet set, write it now
+  if (masterQs.length > 0) {
+    try {
+      const keyRef = doc(db, 'examAnswerKeys', examId);
+      setDoc(
+        keyRef,
+        {
+          examId,
+          questions: masterQs.map((q, idx) => ({
+            id: q.id || `q-${idx + 1}`,
+            examId,
+            question: q.question,
+            options: q.options || [],
+            correctAnswer: q.correctAnswer || '',
+            marks: Number(q.marks) || 1,
+            order: Number(q.order) || idx + 1,
+          })),
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      ).catch(() => {});
+    } catch {
+      // non-blocking
+    }
   }
 
   if (masterQs.length === 0 && (MOCK_QUESTIONS as any)[examId]) {

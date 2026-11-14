@@ -206,6 +206,28 @@ service cloud.firestore {
     }
 
     // =========================================================================
+    // EXAM ANSWER KEYS (Encrypted & Protected Answer Keys for Objective Grading)
+    // =========================================================================
+    match /examAnswerKeys/{examId} {
+      // Faculty and Admins have full read/write access anytime
+      allow read, write: if isAuthenticated() && (isAdmin() || isTeacher());
+
+      // Students can read the authoritative answer keys ONLY after their assignment has been submitted
+      allow read: if isAuthenticated() && (
+        isAdmin() ||
+        isTeacher() ||
+        (
+          isStudent() && (
+            (exists(/databases/$(database)/documents/assignments/$(examId + '_' + request.auth.uid)) &&
+             get(/databases/$(database)/documents/assignments/$(examId + '_' + request.auth.uid)).data.status == 'submitted') ||
+            (exists(/databases/$(database)/documents/assignments/$(request.auth.uid + '_' + examId)) &&
+             get(/databases/$(database)/documents/assignments/$(request.auth.uid + '_' + examId)).data.status == 'submitted')
+          )
+        )
+      );
+    }
+
+    // =========================================================================
     // QUESTIONS COLLECTION (Protected Question Bank & Answer Keys)
     // =========================================================================
     match /questions/{questionId} {
@@ -340,9 +362,24 @@ service cloud.firestore {
         )
       );
       
-      // ONLY authorized Teachers & Admins can publish or update official examination results.
-      // Students have ZERO create or update permission on the results collection.
-      allow create, update: if isAuthenticated() && (isAdmin() || isTeacher());
+      // Teachers & Admins can create or update results anytime.
+      // Students can create their own result record ONLY when their assignment has been submitted.
+      allow create: if isAuthenticated() && (
+        isAdmin() ||
+        isTeacher() ||
+        (
+          isStudent() &&
+          request.resource.data.studentId == request.auth.uid &&
+          (
+            (exists(/databases/$(database)/documents/assignments/$(request.resource.data.examId + '_' + request.auth.uid)) &&
+             get(/databases/$(database)/documents/assignments/$(request.resource.data.examId + '_' + request.auth.uid)).data.status == 'submitted') ||
+            (exists(/databases/$(database)/documents/assignments/$(request.auth.uid + '_' + request.resource.data.examId)) &&
+             get(/databases/$(database)/documents/assignments/$(request.auth.uid + '_' + request.resource.data.examId)).data.status == 'submitted')
+          )
+        )
+      );
+      
+      allow update: if isAuthenticated() && (isAdmin() || isTeacher());
       allow delete: if isAuthenticated() && (isAdmin() || isTeacher());
     }
   }

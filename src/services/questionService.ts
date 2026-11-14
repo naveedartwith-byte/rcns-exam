@@ -34,6 +34,40 @@ export interface BulkImportResult {
   errors?: string[];
 }
 
+/**
+ * Synchronizes protected answer keys to examAnswerKeys/{examId} document.
+ * This enables 100% accurate, 1-read grading for students upon submission on Spark Free Tier.
+ */
+export async function syncExamAnswerKeys(
+  examId: string,
+  questions: (Omit<Question, 'id'> & { id?: string })[]
+): Promise<void> {
+  if (!examId || !Array.isArray(questions) || questions.length === 0) return;
+  try {
+    const keyRef = doc(db, 'examAnswerKeys', examId);
+    await setDoc(
+      keyRef,
+      {
+        examId,
+        questions: questions.map((q, idx) => ({
+          id: q.id || `q-${idx + 1}`,
+          examId,
+          question: q.question,
+          options: q.options || [],
+          correctAnswer: q.correctAnswer || '',
+          marks: Number(q.marks) || 1,
+          order: Number(q.order) || idx + 1,
+          explanation: q.explanation || '',
+        })),
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+  } catch (err) {
+    console.warn('[syncExamAnswerKeys] Could not sync examAnswerKeys:', err);
+  }
+}
+
 export const questionService = {
   /**
    * Retrieves all questions associated with an exam (Teacher/Admin view with answers).
@@ -201,6 +235,8 @@ export const questionService = {
         sanitizedQuestions,
         updatedAt: serverTimestamp(),
       });
+      // Synchronize protected answer keys for instantaneous student grading upon submission
+      await syncExamAnswerKeys(examId, questions);
     } catch (err) {
       console.warn('Could not update parent exam question count:', err);
     }
@@ -311,6 +347,8 @@ export const questionService = {
         sanitizedQuestions,
         updatedAt: serverTimestamp(),
       });
+      // Synchronize protected answer keys for instantaneous student grading upon submission
+      await syncExamAnswerKeys(examId, allCurrentQuestions);
     } catch (err) {
       console.warn('Could not update parent exam question count:', err);
     }
@@ -346,6 +384,9 @@ export const questionService = {
       questionCount: sanitizedQuestions.length,
       updatedAt: serverTimestamp(),
     });
+
+    // Synchronize protected answer keys
+    await syncExamAnswerKeys(examId, questions);
 
     return sanitizedQuestions.length;
   },
