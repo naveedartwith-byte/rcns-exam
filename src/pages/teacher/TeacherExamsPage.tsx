@@ -150,7 +150,7 @@ export const TeacherExamsPage: React.FC = () => {
     optionC: '',
     optionD: '',
     correctAnswer: 0,
-    marks: 2,
+    marks: 1,
     explanation: '',
   });
 
@@ -555,7 +555,7 @@ export const TeacherExamsPage: React.FC = () => {
       optionC: '',
       optionD: '',
       correctAnswer: 0,
-      marks: 2,
+      marks: 1,
       explanation: '',
     });
     setIsQuestionFormOpen(true);
@@ -1484,7 +1484,7 @@ export const TeacherExamsPage: React.FC = () => {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
               <span style={{ fontSize: '0.9rem', color: 'var(--color-slate-600)' }}>
                 Configured Questions: <strong>{questionsList.length}</strong> (Total Marks:{' '}
-                <strong>{questionsList.reduce((acc, q) => acc + (Number(q.marks) || 2), 0)}</strong>)
+                <strong>{questionsList.reduce((acc, q) => acc + (Number(q.marks) || 1), 0)}</strong>)
               </span>
 
               <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
@@ -1549,7 +1549,7 @@ export const TeacherExamsPage: React.FC = () => {
                               {q.question}
                             </div>
                             <div style={{ fontSize: '0.78rem', color: 'var(--color-slate-500)', marginTop: '0.2rem' }}>
-                              Marks: {q.marks || 2}
+                              Marks: {q.marks || 1}
                               {q.explanation && <span style={{ marginLeft: '1rem', fontStyle: 'italic' }}>• Has explanation</span>}
                             </div>
                           </div>

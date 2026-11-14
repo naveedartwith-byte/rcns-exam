@@ -136,7 +136,7 @@ export function validateParsedMCQ(q: ParsedMCQ): ParsedMCQ {
 /**
  * Parses raw text containing one or many MCQs into structured ParsedMCQ objects.
  */
-export function parseMCQText(rawText: string): BulkImportSummary {
+export function parseMCQText(rawText: string, defaultMarks: number = 1): BulkImportSummary {
   const normalized = normalizeMCQText(rawText);
   if (!normalized) {
     return {
@@ -198,7 +198,7 @@ export function parseMCQText(rawText: string): BulkImportSummary {
 
   // 2. Parse each block into a ParsedMCQ
   const parsedQuestions: ParsedMCQ[] = rawBlocks.map((block: string[], index: number) => {
-    return parseSingleBlock(block, index + 1);
+    return parseSingleBlock(block, index + 1, defaultMarks);
   });
 
   // 3. Post-parsing: detect duplicates and finalize validation
@@ -221,7 +221,7 @@ export function parseMCQText(rawText: string): BulkImportSummary {
 /**
  * Parses a single block of lines into a ParsedMCQ
  */
-function parseSingleBlock(block: string[], orderIndex: number): ParsedMCQ {
+function parseSingleBlock(block: string[], orderIndex: number, defaultMarks: number = 1): ParsedMCQ {
   let questionText = '';
   let optionA = '';
   let optionB = '';
@@ -337,7 +337,7 @@ function parseSingleBlock(block: string[], orderIndex: number): ParsedMCQ {
     optionD: optionD.trim(),
     correctAnswer,
     explanation: explanation.trim() || undefined,
-    marks: 2,
+    marks: defaultMarks || 1,
     errors: [],
     warnings: [],
     isValid: true,

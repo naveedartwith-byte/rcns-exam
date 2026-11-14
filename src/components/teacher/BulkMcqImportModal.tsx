@@ -56,7 +56,7 @@ export const BulkMcqImportModal: React.FC<BulkMcqImportModalProps> = ({
   const [editForm, setEditForm] = useState<ParsedMCQ | null>(null);
 
   // Import configuration
-  const [defaultMarks, setDefaultMarks] = useState(2);
+  const [defaultMarks, setDefaultMarks] = useState(1);
   const [replaceExisting, setReplaceExisting] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
@@ -96,7 +96,7 @@ export const BulkMcqImportModal: React.FC<BulkMcqImportModalProps> = ({
   // Handle parsing action
   const handleParseQuestions = () => {
     if (!rawText.trim()) return;
-    const summary = parseMCQText(rawText);
+    const summary = parseMCQText(rawText, defaultMarks);
     setParsedData(summary);
     setStep('preview');
   };
@@ -605,7 +605,7 @@ Explanation: Hemoglobin inside red blood cells binds and transports oxygen.`}
                     min="1"
                     max="100"
                     value={defaultMarks}
-                    onChange={(e) => setDefaultMarks(Number(e.target.value) || 2)}
+                    onChange={(e) => setDefaultMarks(Number(e.target.value) || 1)}
                     style={{
                       width: '60px',
                       padding: '0.25rem 0.5rem',

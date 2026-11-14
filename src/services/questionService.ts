@@ -221,17 +221,17 @@ export const questionService = {
       examId,
       question: q.question,
       options: q.options || [],
-      marks: Number(q.marks) || 2,
+      marks: Number(q.marks) || 1,
       order: Number(q.order) || i + 1,
     }));
 
     // Update parent exam metadata
     try {
       const examRef = doc(db, 'exams', examId);
-      const totalMarks = questions.reduce((sum, q) => sum + (Number(q.marks) || 2), 0);
+      const totalMarks = questions.reduce((sum, q) => sum + (Number(q.marks) || 1), 0);
       await updateDoc(examRef, {
         questionCount: questions.length,
-        totalMarks: totalMarks || questions.length * 2,
+        totalMarks: totalMarks || questions.length,
         sanitizedQuestions,
         updatedAt: serverTimestamp(),
       });
@@ -247,7 +247,7 @@ export const questionService = {
    * Validates each item, chunks batch writes, and updates exam metrics.
    */
   async bulkImportQuestions(options: BulkImportOptions): Promise<BulkImportResult> {
-    const { examId, questions, createdBy, defaultMarks = 2, replaceExisting = false } = options;
+    const { examId, questions, createdBy, defaultMarks = 1, replaceExisting = false } = options;
 
     if (!examId) {
       throw new Error('Please select an exam first.');
@@ -378,10 +378,12 @@ export const questionService = {
       order: Number(q.order) || idx + 1,
     }));
 
+    const totalMarks = questions.reduce((sum, q) => sum + (Number(q.marks) || 1), 0);
     const examRef = doc(db, 'exams', examId);
     await updateDoc(examRef, {
       sanitizedQuestions,
       questionCount: sanitizedQuestions.length,
+      totalMarks: totalMarks || sanitizedQuestions.length,
       updatedAt: serverTimestamp(),
     });
 
