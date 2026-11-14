@@ -26,6 +26,7 @@ import {
   MOCK_SEMESTERS,
 } from '../../mock/mockData';
 import { useAuth } from '../../hooks/useAuth';
+import { auth } from '../../firebase/auth';
 import { examService } from '../../services/examService';
 import { questionService } from '../../services/questionService';
 import { assignmentService } from '../../services/assignmentService';
@@ -104,6 +105,7 @@ export const TeacherExamsPage: React.FC = () => {
   const [isExamModalOpen, setIsExamModalOpen] = useState(false);
   const [editingExam, setEditingExam] = useState<Exam | null>(null);
   const [examModalError, setExamModalError] = useState<string | null>(null);
+  const [isSavingExam, setIsSavingExam] = useState(false);
 
   const [examForm, setExamForm] = useState({
     title: '',
@@ -261,10 +263,42 @@ export const TeacherExamsPage: React.FC = () => {
     }
   };
 
-  const handleSaveExam = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!currentUser) return;
+  const handleSaveExam = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     setExamModalError(null);
+
+    const activeUser = currentUser || auth.currentUser;
+    if (!activeUser) {
+      setExamModalError('Session expired. Please log in again.');
+      document.querySelector('.rcns-modal-body')?.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
+    if (!examForm.title?.trim()) {
+      setExamModalError('Please enter an Examination Title (e.g. Mid-Term: Adult Health Nursing).');
+      document.querySelector('.rcns-modal-body')?.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+    if (!examForm.subject?.trim()) {
+      setExamModalError('Please enter Subject & Course Code (e.g. Adult Health Nursing I).');
+      document.querySelector('.rcns-modal-body')?.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+    if (!examForm.batch) {
+      setExamModalError('Please select the enrolled Batch.');
+      document.querySelector('.rcns-modal-body')?.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+    if (!examForm.semester) {
+      setExamModalError('Please select the Semester for the chosen Batch.');
+      document.querySelector('.rcns-modal-body')?.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+    if (!examForm.duration || Number(examForm.duration) <= 0) {
+      setExamModalError('Examination duration must be at least 1 minute.');
+      document.querySelector('.rcns-modal-body')?.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
 
     // Validate schedule (ISSUE 3)
     const scheduleValidation = validateSchedule(
@@ -274,15 +308,7 @@ export const TeacherExamsPage: React.FC = () => {
     );
     if (scheduleValidation) {
       setExamModalError(scheduleValidation);
-      return;
-    }
-
-    if (!examForm.batch) {
-      setExamModalError('Please select the enrolled Batch.');
-      return;
-    }
-    if (!examForm.semester) {
-      setExamModalError('Please select the Semester for the chosen Batch.');
+      document.querySelector('.rcns-modal-body')?.scrollTo({ top: 0, behavior: 'smooth' });
       return;
     }
 
@@ -290,6 +316,7 @@ export const TeacherExamsPage: React.FC = () => {
     const codeValidation = examCodeService.validateCodeFormat(examForm.secretCode);
     if (!codeValidation.valid) {
       setExamModalError(codeValidation.error || 'Please enter a valid Secret Exam Code.');
+      document.querySelector('.rcns-modal-body')?.scrollTo({ top: 0, behavior: 'smooth' });
       return;
     }
 
@@ -301,6 +328,8 @@ export const TeacherExamsPage: React.FC = () => {
     const { secretCode, ...examPayload } = examForm;
 
     try {
+      setIsSavingExam(true);
+
       if (editingExam) {
         // Update in Firestore
         await examService.updateExam(editingExam.id, {
@@ -315,7 +344,7 @@ export const TeacherExamsPage: React.FC = () => {
         });
 
         // Save secret code in protected examSecrets collection
-        await examCodeService.saveExamSecret(editingExam.id, secretCode, currentUser.uid);
+        await examCodeService.saveExamSecret(editingExam.id, secretCode, activeUser.uid);
         setExamSecretsMap((prev) => ({ ...prev, [editingExam.id]: normalizeExamCode(secretCode) }));
 
         // Automatically assign/sync cohort if status is scheduled or active
@@ -325,7 +354,7 @@ export const TeacherExamsPage: React.FC = () => {
             batch: examForm.batch,
             semester: examForm.semester,
             program: examForm.program,
-            assignedBy: currentUser.uid,
+            assignedBy: activeUser.uid,
           });
         }
 
@@ -338,7 +367,7 @@ export const TeacherExamsPage: React.FC = () => {
           shuffleQuestions: examForm.shuffleQuestions !== false,
           startAt: startIso,
           endAt: endIso,
-          teacherId: currentUser.uid,
+          teacherId: activeUser.uid,
           teacherName: userProfile?.name || 'Faculty Member',
           duration: Number(examForm.duration),
           totalMarks: Number(examForm.totalMarks),
@@ -347,7 +376,7 @@ export const TeacherExamsPage: React.FC = () => {
         });
 
         // Save secret code in protected examSecrets collection
-        await examCodeService.saveExamSecret(newExamId, secretCode, currentUser.uid);
+        await examCodeService.saveExamSecret(newExamId, secretCode, activeUser.uid);
         setExamSecretsMap((prev) => ({ ...prev, [newExamId]: normalizeExamCode(secretCode) }));
 
         // Automatically assign cohort if status is scheduled or active
@@ -357,18 +386,21 @@ export const TeacherExamsPage: React.FC = () => {
             batch: examForm.batch,
             semester: examForm.semester,
             program: examForm.program,
-            assignedBy: currentUser.uid,
+            assignedBy: activeUser.uid,
           });
         }
 
         setNotification({ type: 'success', text: `New exam "${examForm.title}" created with Secret Code protected!` });
       }
 
-      fetchTeacherExams();
+      await fetchTeacherExams();
       setIsExamModalOpen(false);
     } catch (err: any) {
       console.error('Error saving exam:', err);
       setExamModalError(err.message || 'Error saving examination paper.');
+      document.querySelector('.rcns-modal-body')?.scrollTo({ top: 0, behavior: 'smooth' });
+    } finally {
+      setIsSavingExam(false);
     }
   };
 
@@ -1031,14 +1063,30 @@ export const TeacherExamsPage: React.FC = () => {
         description="Configure evaluation parameters, duration, batch target, and Pakistan Standard Time schedule."
         maxWidth="lg"
         footer={
-          <>
-            <Button variant="outline" onClick={() => setIsExamModalOpen(false)}>
-              Cancel
-            </Button>
-            <Button variant="primary" onClick={handleSaveExam} style={{ backgroundColor: '#0f2744' }}>
-              {editingExam ? 'Save Changes' : 'Create Examination Paper'}
-            </Button>
-          </>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: '1rem', flexWrap: 'wrap' }}>
+            <div style={{ flex: 1, minWidth: '240px' }}>
+              {examModalError && (
+                <div style={{ color: '#dc2626', fontSize: '0.825rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem', backgroundColor: '#fef2f2', border: '1px solid #fecaca', padding: '0.45rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>
+                  <span>⚠️</span>
+                  <span>{examModalError}</span>
+                </div>
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+              <Button variant="outline" onClick={() => setIsExamModalOpen(false)} disabled={isSavingExam}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                onClick={() => handleSaveExam()}
+                isLoading={isSavingExam}
+                disabled={isSavingExam}
+                style={{ backgroundColor: '#0f2744' }}
+              >
+                {isSavingExam ? 'Saving Paper...' : editingExam ? 'Save Changes' : 'Create Examination Paper'}
+              </Button>
+            </div>
+          </div>
         }
       >
         <form onSubmit={handleSaveExam} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
@@ -1179,7 +1227,16 @@ export const TeacherExamsPage: React.FC = () => {
                 label="Scheduled Start Date & Time (PKT)"
                 type="datetime-local"
                 value={examForm.startAt}
-                onChange={(e) => setExamForm({ ...examForm, startAt: e.target.value })}
+                onChange={(e) => {
+                  const newStart = e.target.value;
+                  const dur = Number(examForm.duration) || 60;
+                  const endCalc = calculateEndAtPkt(newStart, dur);
+                  setExamForm({
+                    ...examForm,
+                    startAt: newStart,
+                    endAt: endCalc ? toDatetimeLocalPktString(endCalc) : examForm.endAt,
+                  });
+                }}
                 required
                 requiredIndicator
                 helperText="Local Pakistan Time (UTC+05:00)"
@@ -1199,7 +1256,15 @@ export const TeacherExamsPage: React.FC = () => {
                 label="Duration (Minutes)"
                 type="number"
                 value={examForm.duration}
-                onChange={(e) => setExamForm({ ...examForm, duration: Number(e.target.value) })}
+                onChange={(e) => {
+                  const dur = Number(e.target.value);
+                  const endCalc = calculateEndAtPkt(examForm.startAt, dur || 60);
+                  setExamForm({
+                    ...examForm,
+                    duration: dur,
+                    endAt: endCalc ? toDatetimeLocalPktString(endCalc) : examForm.endAt,
+                  });
+                }}
                 required
                 requiredIndicator
                 helperText="Allocated candidate testing time"
