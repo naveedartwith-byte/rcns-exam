@@ -275,7 +275,7 @@ service cloud.firestore {
         (
           isStudent() &&
           request.resource.data.studentId == request.auth.uid &&
-          request.resource.data.status in ['assigned', 'started'] &&
+          request.resource.data.status in ['assigned', 'started', 'submitted'] &&
           !request.resource.data.keys().hasAny([
             'marks', 'obtainedMarks', 'mcqMarks', 'writtenMarks',
             'shortQuestionsMarks', 'longQuestionsMarks', 'grade',
@@ -307,8 +307,7 @@ service cloud.firestore {
           (!('batch' in resource.data) || request.resource.data.batch == resource.data.batch) &&
           (!('semester' in resource.data) || request.resource.data.semester == resource.data.semester) &&
           (!('program' in resource.data) || request.resource.data.program == resource.data.program) &&
-          ((resource.data.status == 'assigned' && request.resource.data.status in ['assigned', 'started']) ||
-           (resource.data.status == 'started' && request.resource.data.status in ['started', 'submitted'])) &&
+          ((resource.data.status in ['assigned', 'started'] && request.resource.data.status in ['assigned', 'started', 'submitted'])) &&
           (!('isLocked' in resource.data) || resource.data.isLocked != true) &&
           !request.resource.data.keys().hasAny([
             'marks', 'obtainedMarks', 'mcqMarks', 'writtenMarks',
@@ -334,7 +333,10 @@ service cloud.firestore {
             'updatedAt',
             'attemptId',
             'codeVerified',
-            'codeVerifiedAt'
+            'codeVerifiedAt',
+            'studentName',
+            'kmuRegistrationNo',
+            'fatherName'
           ])
         )
       );

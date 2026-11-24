@@ -67,25 +67,29 @@ export const assignmentService = {
     semester?: string;
     program?: string;
     status?: AssignmentStatus;
+    studentName?: string;
+    kmuRegistrationNo?: string;
+    fatherName?: string;
   }): Promise<string> {
     const assignmentId = `${assignmentData.examId}_${assignmentData.studentId}`;
     const assignmentRef = doc(db, 'assignments', assignmentId);
 
-    await setDoc(
-      assignmentRef,
-      {
-        id: assignmentId,
-        examId: assignmentData.examId,
-        studentId: assignmentData.studentId,
-        assignedBy: assignmentData.assignedBy || 'teacher-1',
-        batch: assignmentData.batch || '',
-        semester: assignmentData.semester || '',
-        program: assignmentData.program || '',
-        status: assignmentData.status || 'assigned',
-        assignedAt: serverTimestamp(),
-      },
-      { merge: true }
-    );
+    const docPayload: Record<string, any> = {
+      id: assignmentId,
+      examId: assignmentData.examId,
+      studentId: assignmentData.studentId,
+      assignedBy: assignmentData.assignedBy || 'teacher-1',
+      batch: assignmentData.batch || '',
+      semester: assignmentData.semester || '',
+      program: assignmentData.program || '',
+      status: assignmentData.status || 'assigned',
+      assignedAt: serverTimestamp(),
+    };
+    if (assignmentData.studentName) docPayload.studentName = assignmentData.studentName;
+    if (assignmentData.kmuRegistrationNo) docPayload.kmuRegistrationNo = assignmentData.kmuRegistrationNo;
+    if (assignmentData.fatherName) docPayload.fatherName = assignmentData.fatherName;
+
+    await setDoc(assignmentRef, docPayload, { merge: true });
 
     return assignmentId;
   },
@@ -211,6 +215,9 @@ export const assignmentService = {
           id: assignmentId,
           examId: params.examId,
           studentId: studentUid,
+          studentName: student.name || '',
+          kmuRegistrationNo: student.kmuRegistrationNo || '',
+          fatherName: student.fatherName || '',
           assignedBy: params.assignedBy || 'teacher-1',
           batch: cleanBatch,
           semester: cleanSemester,

@@ -983,7 +983,7 @@ export const StudentExamsPage: React.FC = () => {
       const result = await resultService.submitExamAttempt({
         studentId: activeUser.uid,
         studentName: userProfile?.name || studentProfile?.name || 'Student Candidate',
-        kmuRegistrationNo: studentProfile?.kmuRegistrationNo || '',
+        kmuRegistrationNo: studentProfile?.kmuRegistrationNo || (userProfile as any)?.kmuRegistrationNo || '',
         fatherName: studentProfile?.fatherName || (userProfile as any)?.fatherName || '',
         examId: takingExam.id,
         examTitle: takingExam.title,

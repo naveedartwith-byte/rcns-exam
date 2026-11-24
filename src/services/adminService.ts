@@ -507,10 +507,16 @@ export const adminService = {
         }
       }
 
-      if (!candidateEmail || !candidateEmail.includes('@')) {
+      if (!candidateEmail || !candidateEmail.includes('@') || !currentPass) {
         const userSnap = await getDoc(doc(db, 'users', studentUid));
-        if (userSnap.exists() && userSnap.data()?.email) {
-          candidateEmail = userSnap.data().email.trim();
+        if (userSnap.exists()) {
+          const uData = userSnap.data();
+          if ((!candidateEmail || !candidateEmail.includes('@')) && uData?.email) {
+            candidateEmail = uData.email.trim();
+          }
+          if (!currentPass && (uData?.passKey || uData?.studentPassKey)) {
+            currentPass = (uData.passKey || uData.studentPassKey).trim();
+          }
         }
       }
 

@@ -124,6 +124,60 @@ export async function getMasterQuestionsForExam(examId: string, examData?: any):
   return sorted;
 }
 
+const studentProfileMetadataCache = new Map<string, { name: string; kmuRegistrationNo: string; fatherName?: string }>();
+
+async function enrichResultsWithStudentMetadata(results: Result[]): Promise<Result[]> {
+  const missingResults = results.filter(
+    (r) => !r.studentName || r.studentName === 'Student Candidate' || !r.kmuRegistrationNo
+  );
+  if (missingResults.length === 0) return results;
+
+  const uncachedUids = Array.from(
+    new Set(
+      missingResults
+        .map((r) => r.studentId)
+        .filter((uid) => uid && !studentProfileMetadataCache.has(uid))
+    )
+  );
+
+  if (uncachedUids.length > 0) {
+    await Promise.all(
+      uncachedUids.map(async (uid) => {
+        try {
+          const sSnap = await getDoc(doc(db, 'students', uid)).catch(() => null);
+          if (sSnap?.exists()) {
+            const s = sSnap.data();
+            studentProfileMetadataCache.set(uid, {
+              name: s.name || '',
+              kmuRegistrationNo: s.kmuRegistrationNo || '',
+              fatherName: s.fatherName || '',
+            });
+          }
+        } catch {}
+      })
+    );
+  }
+
+  for (const r of results) {
+    if (!r.studentName || r.studentName === 'Student Candidate' || !r.kmuRegistrationNo) {
+      const p = studentProfileMetadataCache.get(r.studentId);
+      if (p) {
+        if ((!r.studentName || r.studentName === 'Student Candidate') && p.name) {
+          r.studentName = p.name;
+        }
+        if (!r.kmuRegistrationNo && p.kmuRegistrationNo) {
+          r.kmuRegistrationNo = p.kmuRegistrationNo;
+        }
+        if (!r.fatherName && p.fatherName) {
+          r.fatherName = p.fatherName;
+        }
+      }
+    }
+  }
+
+  return results;
+}
+
 function sortResultsNewestFirst(results: Result[]): Result[] {
   return results.sort((a, b) => {
     const parseTime = (val: any) => {
@@ -295,7 +349,8 @@ export const resultService = {
     }
 
     // Sort results newest first (submittedAt / gradedAt descending) - Requirement #9
-    return sortResultsNewestFirst(finalizedResults);
+    const enriched = await enrichResultsWithStudentMetadata(finalizedResults);
+    return sortResultsNewestFirst(enriched);
   },
 
   /**
@@ -307,7 +362,8 @@ export const resultService = {
     const q = query(resultsCol, where('examId', '==', examId));
     const snapshot = await getDocs(q);
     const results = snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Result));
-    return sortResultsNewestFirst(results);
+    const enriched = await enrichResultsWithStudentMetadata(results);
+    return sortResultsNewestFirst(enriched);
   },
 
   /**
@@ -357,7 +413,8 @@ export const resultService = {
           });
         });
 
-        const sorted = sortResultsNewestFirst(combined);
+        const enriched = await enrichResultsWithStudentMetadata(combined);
+        const sorted = sortResultsNewestFirst(enriched);
         cachedResultsByExamScope.set(cacheKey, { list: sorted, cachedAt: Date.now() });
         return sorted;
       } finally {
@@ -385,7 +442,8 @@ export const resultService = {
         const resultsCol = collection(db, 'results');
         const snapshot = await getDocs(resultsCol);
         const results = snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Result));
-        const sorted = sortResultsNewestFirst(results);
+        const enriched = await enrichResultsWithStudentMetadata(results);
+        const sorted = sortResultsNewestFirst(enriched);
         cachedAllResults = { list: sorted, cachedAt: Date.now() };
         return sorted;
       } finally {
@@ -483,54 +541,90 @@ export const resultService = {
 
     const writtenAnswersCount = Object.keys(cleanWrittenAnswers).length;
 
+    // Resolve student identity reliably (prevent "Student Candidate" or blank KMU number)
+    let resolvedStudentName = params.studentName;
+    let resolvedKmuReg = params.kmuRegistrationNo;
+    let resolvedFatherName = params.fatherName;
+
+    if (!resolvedStudentName || resolvedStudentName === 'Student Candidate' || !resolvedKmuReg) {
+      try {
+        const studentSnap = await getDoc(doc(db, 'students', params.studentId)).catch(() => null);
+        if (studentSnap?.exists()) {
+          const sData = studentSnap.data();
+          if (!resolvedStudentName || resolvedStudentName === 'Student Candidate') {
+            resolvedStudentName = sData?.name || '';
+          }
+          if (!resolvedKmuReg) {
+            resolvedKmuReg = sData?.kmuRegistrationNo || '';
+          }
+          if (!resolvedFatherName) {
+            resolvedFatherName = sData?.fatherName || '';
+          }
+        }
+      } catch (profileLookupErr) {
+        console.warn('Student profile lookup notice during submission:', profileLookupErr);
+      }
+    }
+
     // 2. Safely Persist Submission to Candidate's Assignment Document FIRST
     // (Students are authorized to update their own assignment under Firestore security rules)
     const assignmentId = `${params.examId}_${params.studentId}`;
+    const assignRef = doc(db, 'assignments', assignmentId);
+
+    // Primary attempt: updateDoc targeting only permitted mutable submission fields
+    const updatePayload: Record<string, any> = {
+      status: 'submitted',
+      submittedAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      answers: cleanAnswers,
+      answersCount: answeredCount,
+    };
+    if (resolvedStudentName && resolvedStudentName !== 'Student Candidate') {
+      updatePayload.studentName = resolvedStudentName;
+    }
+    if (resolvedKmuReg) {
+      updatePayload.kmuRegistrationNo = resolvedKmuReg;
+    }
+    if (resolvedFatherName) {
+      updatePayload.fatherName = resolvedFatherName;
+    }
+    if (Object.keys(cleanWrittenAnswers).length > 0) {
+      updatePayload.writtenAnswers = cleanWrittenAnswers;
+      updatePayload.writtenAnswersCount = writtenAnswersCount;
+    }
+
     try {
-      const assignRef = doc(db, 'assignments', assignmentId);
-      const assignmentPayload: Record<string, any> = {
-        id: assignmentId,
-        examId: params.examId,
-        studentId: params.studentId,
-        studentName: params.studentName || 'Student Candidate',
-        kmuRegistrationNo: params.kmuRegistrationNo || '',
-        fatherName: params.fatherName || '',
-        examTitle: params.examTitle || examData?.title || 'Academic Examination',
-        examType: (params.examType as any) || examData?.type || 'exam',
-        subject: params.subject || examData?.subject || 'Clinical Assessment',
-        program: params.program || examData?.program || '',
-        semester: params.semester || examData?.semester || '',
-        batch: params.batch || examData?.batch || '',
-        status: 'submitted',
-        submittedAt: serverTimestamp(),
-        answers: cleanAnswers,
-        answersCount: answeredCount,
-        totalMarks,
-      };
-
-      if (Object.keys(cleanWrittenAnswers).length > 0) {
-        assignmentPayload.writtenAnswers = cleanWrittenAnswers;
-        assignmentPayload.writtenAnswersCount = writtenAnswersCount;
-      }
-
-      await setDoc(assignRef, assignmentPayload, { merge: true });
-    } catch (assignErr) {
-      console.warn('Assignment setDoc submission record notice, attempting fallback update:', assignErr);
+      await updateDoc(assignRef, updatePayload);
+    } catch (assignUpdateErr) {
+      console.warn('Assignment updateDoc notice, attempting setDoc merge fallback:', assignUpdateErr);
       try {
-        const assignRef = doc(db, 'assignments', assignmentId);
-        const updatePayload: Record<string, any> = {
+        const fullPayload: Record<string, any> = {
+          id: assignmentId,
+          examId: params.examId,
+          studentId: params.studentId,
+          studentName: resolvedStudentName || 'Student Candidate',
+          kmuRegistrationNo: resolvedKmuReg || '',
+          fatherName: resolvedFatherName || '',
+          examTitle: params.examTitle || examData?.title || 'Academic Examination',
+          examType: (params.examType as any) || examData?.type || 'exam',
+          subject: params.subject || examData?.subject || 'Clinical Assessment',
+          program: params.program || examData?.program || '',
+          semester: params.semester || examData?.semester || '',
+          batch: params.batch || examData?.batch || '',
           status: 'submitted',
           submittedAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
           answers: cleanAnswers,
           answersCount: answeredCount,
+          totalMarks,
         };
         if (Object.keys(cleanWrittenAnswers).length > 0) {
-          updatePayload.writtenAnswers = cleanWrittenAnswers;
-          updatePayload.writtenAnswersCount = writtenAnswersCount;
+          fullPayload.writtenAnswers = cleanWrittenAnswers;
+          fullPayload.writtenAnswersCount = writtenAnswersCount;
         }
-        await updateDoc(assignRef, updatePayload);
-      } catch (updateErr) {
-        console.error('Assignment fallback update error:', updateErr);
+        await setDoc(assignRef, fullPayload, { merge: true });
+      } catch (assignSetErr) {
+        console.error('Assignment submission record error:', assignSetErr);
         throw new Error('Failed to record examination submission. Please verify your connection and retry.');
       }
     }
@@ -643,9 +737,9 @@ export const resultService = {
       id: resultId,
       examId: params.examId,
       studentId: params.studentId,
-      studentName: params.studentName || 'Student Candidate',
-      kmuRegistrationNo: params.kmuRegistrationNo,
-      fatherName: params.fatherName || '',
+      studentName: resolvedStudentName || 'Student Candidate',
+      kmuRegistrationNo: resolvedKmuReg || '',
+      fatherName: resolvedFatherName || '',
       examTitle: params.examTitle || examData?.title || 'Academic Examination',
       examType: (params.examType as any) || examData?.type || 'exam',
       subject: params.subject || examData?.subject || 'Clinical Assessment',
@@ -766,12 +860,28 @@ export const resultService = {
       }
     }
 
+    let evalStudentName = assignData.studentName;
+    let evalKmuReg = assignData.kmuRegistrationNo;
+    let evalFatherName = assignData.fatherName;
+    if (!evalStudentName || evalStudentName === 'Student Candidate' || !evalKmuReg) {
+      try {
+        const sSnap = await getDoc(doc(db, 'students', studentId)).catch(() => null);
+        if (sSnap?.exists()) {
+          const s = sSnap.data();
+          if (!evalStudentName || evalStudentName === 'Student Candidate') evalStudentName = s.name;
+          if (!evalKmuReg) evalKmuReg = s.kmuRegistrationNo;
+          if (!evalFatherName) evalFatherName = s.fatherName;
+        }
+      } catch {}
+    }
+
     const resultRecord: Result = {
       id: resultId,
       examId,
       studentId,
-      studentName: assignData.studentName || 'Student Candidate',
-      kmuRegistrationNo: assignData.kmuRegistrationNo || '',
+      studentName: evalStudentName || 'Student Candidate',
+      kmuRegistrationNo: evalKmuReg || '',
+      fatherName: evalFatherName || '',
       examTitle: examData?.title || assignData.examTitle || 'Academic Examination',
       examType: (examData?.type || assignData.examType || 'exam') as any,
       subject: examData?.subject || assignData.subject || 'Clinical Assessment',

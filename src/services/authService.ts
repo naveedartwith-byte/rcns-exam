@@ -10,6 +10,7 @@ import {
 import {
   doc,
   getDoc,
+  deleteDoc,
   serverTimestamp,
   writeBatch,
 } from 'firebase/firestore';
@@ -105,31 +106,71 @@ export const authService = {
       : generateKmuEmail(data.kmuRegistrationNo);
 
     console.log('[Registration Step 1] Pre-checking KMU uniqueness for:', normalizedKmu);
-    // 1. Pre-check KMU uniqueness in Firestore before creating Auth user
+    // 1. Pre-check KMU uniqueness across all candidate variations with orphan auto-cleanup
     try {
-      const kmuCheckRef = doc(db, 'kmuRegistrations', normalizedKmu);
-      const kmuCheckSnap = await getDoc(kmuCheckRef);
-      if (kmuCheckSnap.exists()) {
-        throw new Error(
-          `KMU Registration Number "${data.kmuRegistrationNo.trim()}" is already registered in the system.`
-        );
+      const candidateKeys = generateKmuLookupCandidates(data.kmuRegistrationNo.trim());
+      for (const key of candidateKeys) {
+        const kmuCheckRef = doc(db, 'kmuRegistrations', key);
+        const kmuCheckSnap = await getDoc(kmuCheckRef);
+        if (kmuCheckSnap.exists()) {
+          const regData = kmuCheckSnap.data() as { uid?: string };
+          let studentActive = false;
+          if (regData?.uid) {
+            const studentCheck = await getDoc(doc(db, 'students', regData.uid)).catch(() => null);
+            if (studentCheck?.exists()) {
+              studentActive = true;
+            } else {
+              const userCheck = await getDoc(doc(db, 'users', regData.uid)).catch(() => null);
+              if (userCheck?.exists()) {
+                studentActive = true;
+              }
+            }
+          }
+          if (studentActive) {
+            throw new Error(
+              `KMU Registration Number "${data.kmuRegistrationNo.trim()}" is already registered in the system.`
+            );
+          } else {
+            // Orphaned KMU record from previously deleted student. Safely clean it up.
+            await deleteDoc(kmuCheckRef).catch(() => {});
+          }
+        }
       }
     } catch (kmuErr: any) {
-      console.error('[Registration Step 1 Failed]', kmuErr);
+      console.error('[Registration Step 1 Notice]', kmuErr);
       if (kmuErr.message?.includes('already registered')) throw kmuErr;
       throw new Error(`KMU verification error: ${kmuErr.message || kmuErr.code}`);
     }
 
     console.log('[Registration Step 2] Creating Firebase Auth user for:', studentAuthEmail);
-    // 2. Create the Firebase Auth user
-    const userCredential = await createUserWithEmailAndPassword(
-      auth,
-      studentAuthEmail,
-      data.password
-    );
-    const user = userCredential.user;
-    const uid = user.uid;
-    console.log('[Registration Step 2 Success] Created Auth user with UID:', uid);
+    // 2. Create the Firebase Auth user (with orphan re-claim resilience)
+    let user: any = null;
+    let uid = '';
+    try {
+      const userCredential = await createUserWithEmailAndPassword(
+        auth,
+        studentAuthEmail,
+        data.password
+      );
+      user = userCredential.user;
+      uid = user.uid;
+      console.log('[Registration Step 2 Success] Created Auth user with UID:', uid);
+    } catch (authCreateErr: any) {
+      if (authCreateErr?.code === 'auth/email-already-in-use') {
+        try {
+          const signInCred = await signInWithEmailAndPassword(auth, studentAuthEmail, data.password);
+          user = signInCred.user;
+          uid = user.uid;
+          console.log('[Registration Step 2 Re-claim] Authenticated orphaned Auth user with UID:', uid);
+        } catch (signInErr: any) {
+          throw new Error(
+            `KMU user account already exists in Firebase Authentication. If this profile was recently deleted, please log in with your previous password or contact administrator to reset it.`
+          );
+        }
+      } else {
+        throw authCreateErr;
+      }
+    }
 
     try {
       console.log('[Registration Step 3] Writing Firestore batch for UID:', uid);

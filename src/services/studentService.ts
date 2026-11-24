@@ -25,9 +25,12 @@ import {
   serverTimestamp,
   writeBatch,
 } from 'firebase/firestore';
+import { initializeApp, deleteApp } from 'firebase/app';
+import { getAuth, signInWithEmailAndPassword, deleteUser } from 'firebase/auth';
+import { firebaseConfig } from '../firebase/config';
 import { db } from '../firebase/firestore';
 import type { StudentProfile } from '../types/student';
-import { normalizeKmuRegistration, generateKmuLookupCandidates } from '../utils/kmuRegistration';
+import { normalizeKmuRegistration, generateKmuLookupCandidates, generateKmuEmail } from '../utils/kmuRegistration';
 
 export const studentService = {
   /**
@@ -313,28 +316,31 @@ export const studentService = {
     const studentRef = doc(db, 'students', uid);
     const userRef = doc(db, 'users', uid);
 
-    // 2. Reference for KMU registry claim
-    let kmuRef = null;
-    if (kmuRegistrationNo) {
-      const normalizedKmu = normalizeKmuRegistration(kmuRegistrationNo);
-      if (normalizedKmu) {
-        kmuRef = doc(db, 'kmuRegistrations', normalizedKmu);
-      }
-    }
+    // 2. Comprehensive KMU registry cleanup (all candidate lookup variations)
+    const candidateKeys = kmuRegistrationNo ? generateKmuLookupCandidates(kmuRegistrationNo) : [];
+    const candidateDocRefs = candidateKeys.map((key) => doc(db, 'kmuRegistrations', key));
 
-    // 3. Query candidate assignments and results
-    const [assignSnap, resultsSnap] = await Promise.all([
+    // 3. Query candidate assignments, results, and KMU registry docs by UID
+    const [assignSnap, resultsSnap, kmuByUidSnap] = await Promise.all([
       getDocs(query(collection(db, 'assignments'), where('studentId', '==', uid))),
       getDocs(query(collection(db, 'results'), where('studentId', '==', uid))),
+      getDocs(query(collection(db, 'kmuRegistrations'), where('uid', '==', uid))).catch(() => null),
     ]);
 
-    const allDocRefs = [
-      studentRef,
-      userRef,
-      ...(kmuRef ? [kmuRef] : []),
-      ...assignSnap.docs.map((d) => d.ref),
-      ...resultsSnap.docs.map((d) => d.ref),
-    ];
+    // Use a Map by document path to prevent duplicate DocumentReference entries in atomic batch
+    const docRefMap = new Map<string, any>();
+    const addRef = (ref: any) => {
+      if (ref && ref.path) docRefMap.set(ref.path, ref);
+    };
+
+    addRef(studentRef);
+    addRef(userRef);
+    candidateDocRefs.forEach(addRef);
+    if (kmuByUidSnap) kmuByUidSnap.docs.forEach((d) => addRef(d.ref));
+    assignSnap.docs.forEach((d) => addRef(d.ref));
+    resultsSnap.docs.forEach((d) => addRef(d.ref));
+
+    const allDocRefs = Array.from(docRefMap.values());
 
     // Delete in atomic chunks of 250
     const BATCH_LIMIT = 250;
@@ -343,6 +349,31 @@ export const studentService = {
       const chunk = allDocRefs.slice(i, i + BATCH_LIMIT);
       chunk.forEach((ref) => batch.delete(ref));
       await batch.commit();
+    }
+
+    // 4. Also delete the Auth record from Firebase Authentication if passKey is available
+    const candidateEmail = student.email || (kmuRegistrationNo ? generateKmuEmail(kmuRegistrationNo) : '');
+    const currentPass = (student.passKey || (student as any).studentPassKey || '').trim();
+    if (candidateEmail && currentPass) {
+      try {
+        const secondaryAppName = `DeleteAuth_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+        const secondaryApp = initializeApp(firebaseConfig, secondaryAppName);
+        const secondaryAuth = getAuth(secondaryApp);
+        try {
+          const userCred = await signInWithEmailAndPassword(secondaryAuth, candidateEmail, currentPass);
+          if (userCred.user) {
+            await deleteUser(userCred.user);
+          }
+        } catch (authDelErr) {
+          console.warn('Could not delete Firebase Auth user via secondary app:', authDelErr);
+        } finally {
+          try {
+            await deleteApp(secondaryApp);
+          } catch {}
+        }
+      } catch (secAppErr) {
+        console.warn('Could not initialize secondary app for student Auth deletion:', secAppErr);
+      }
     }
 
     clearStudentProfilesCache();
